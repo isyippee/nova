@@ -3489,7 +3489,7 @@ class LibvirtDriver(driver.ComputeDriver):
             cfg = self._connect_volume(connection_info, info)
             devices.append(cfg)
             vol['connection_info'] = connection_info
-            vol.save(nova_context.get_admin_context())
+            vol.save()
 
         for d in devices:
             self._set_cache_mode(d)
@@ -4378,7 +4378,7 @@ class LibvirtDriver(driver.ComputeDriver):
             if 'data' in connection_info:
                 connection_info['data']['device_path'] = conf.source_path
                 vol['connection_info'] = connection_info
-                vol.save(context)
+                vol.save()
 
             if (not reboot and 'data' in connection_info and
                     'volume_id' in connection_info['data']):
@@ -6443,7 +6443,7 @@ class LibvirtDriver(driver.ComputeDriver):
         inst_obj.system_metadata['clean_attempts'] = str(attempts + 1)
         if success:
             inst_obj.cleaned = True
-        inst_obj.save(context)
+        inst_obj.save()
 
     def delete_instance_files(self, instance):
         target = libvirt_utils.get_instance_path(instance)
