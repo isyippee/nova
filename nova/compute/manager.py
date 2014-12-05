@@ -768,7 +768,7 @@ class ComputeManager(manager.Manager):
                                     network_info,
                                     bdi, destroy_disks)
 
-    def _is_instance_storage_shared(self, context, instance):
+    def _is_instance_storage_shared(self, context, instance, host=None):
         shared_storage = True
         data = None
         try:
@@ -777,7 +777,7 @@ class ComputeManager(manager.Manager):
             if data:
                 shared_storage = (self.compute_rpcapi.
                                   check_instance_shared_storage(context,
-                                  instance, data))
+                                  instance, data, host=host))
         except NotImplementedError:
             LOG.warning(_('Hypervisor driver does not support '
                           'instance shared storage check, '
@@ -3510,9 +3510,8 @@ class ComputeManager(manager.Manager):
             block_device_info = self._get_instance_block_device_info(
                                 context, instance, bdms=bdms)
 
-            # NOTE(apporc): ephemeral rbd root disk should not be deleted when
-            # migrating, and by now it is not taken care of when resizing.
-            destroy_disks = (CONF.libvirt.images_type != 'rbd')
+            destroy_disks = not self._is_instance_storage_shared(
+                context, instance, host=migration.source_compute)
             self.driver.destroy(context, instance, network_info,
                                 block_device_info, destroy_disks)
 
