@@ -90,6 +90,7 @@ from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import driver as libvirt_driver
 from nova.virt.libvirt import firewall
 from nova.virt.libvirt import imagebackend
+from nova.virt.libvirt import host
 from nova.virt.libvirt import rbd_utils
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.virt import netutils
@@ -175,7 +176,8 @@ class FakeVirDomainSnapshot(object):
 
 class FakeVirtDomain(object):
 
-    def __init__(self, fake_xml=None, uuidstr=None, id=None, name=None):
+    def __init__(self, fake_xml=None, uuidstr=None, id=None, name=None,
+                 running=False):
         if uuidstr is None:
             uuidstr = str(uuid.uuid4())
         self.uuidstr = uuidstr
@@ -193,6 +195,8 @@ class FakeVirtDomain(object):
                     </devices>
                 </domain>
             """
+        self._state = running and libvirt.VIR_DOMAIN_RUNNING or\
+                libvirt.VIR_DOMAIN_SHUTOFF
 
     def name(self):
         if self.domname is None:
@@ -208,13 +212,13 @@ class FakeVirtDomain(object):
                 None, None]
 
     def create(self):
-        pass
+        self.createWithFlags(0)
 
     def managedSave(self, *args):
         pass
 
     def createWithFlags(self, launch_flags):
-        pass
+        self._state = libvirt.VIR_DOMAIN_RUNNING
 
     def XMLDesc(self, *args):
         return self._fake_dom_xml
@@ -244,7 +248,13 @@ class FakeVirtDomain(object):
         pass
 
     def resume(self):
-        pass
+        self._state = libvirt.VIR_DOMAIN_RUNNING
+
+    def isActive(self):
+        return int(self._state == libvirt.VIR_DOMAIN_RUNNING)
+
+    def destroy(self):
+        self._state = libvirt.VIR_DOMAIN_SHUTOFF
 
 
 class CacheConcurrencyTestCase(test.NoDBTestCase):
@@ -5474,15 +5484,6 @@ class LibvirtConnTestCase(test.TestCase):
                              None,
                              _bandwidth).AndRaise(libvirt.libvirtError("ERR"))
 
-        def fake_lookup(instance_name):
-            if instance_name == instance_ref['name']:
-                return vdmock
-
-        self.create_fake_libvirt_mock(lookupByName=fake_lookup)
-        self.mox.StubOutWithMock(self.compute, "_rollback_live_migration")
-        self.compute._rollback_live_migration(self.context, instance_ref,
-                                              'dest', False)
-
         # start test
         migrate_data = {'pre_live_migration_result':
                 {'graphics_listen_addrs':
@@ -5490,10 +5491,9 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(libvirt.libvirtError,
-                      conn._live_migration,
-                      self.context, instance_ref, 'dest', False,
-                      self.compute._rollback_live_migration,
-                      migrate_data=migrate_data)
+                      conn._live_migration_operation,
+                      self.context, instance_ref, 'dest',
+                      False, migrate_data, vdmock)
 
         db.instance_destroy(self.context, instance_ref['uuid'])
 
@@ -5516,15 +5516,6 @@ class LibvirtConnTestCase(test.TestCase):
                             None,
                             _bandwidth).AndRaise(libvirt.libvirtError("ERR"))
 
-        def fake_lookup(instance_name):
-            if instance_name == instance_ref['name']:
-                return vdmock
-
-        self.create_fake_libvirt_mock(lookupByName=fake_lookup)
-        self.mox.StubOutWithMock(self.compute, "_rollback_live_migration")
-        self.compute._rollback_live_migration(self.context, instance_ref,
-                                              'dest', False)
-
         # start test
         migrate_data = {'pre_live_migration_result':
                 {'graphics_listen_addrs':
@@ -5532,10 +5523,9 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(libvirt.libvirtError,
-                      conn._live_migration,
-                      self.context, instance_ref, 'dest', False,
-                      self.compute._rollback_live_migration,
-                      migrate_data=migrate_data)
+                      conn._live_migration_operation,
+                      self.context, instance_ref, 'dest',
+                      False, migrate_data, vdmock)
 
         db.instance_destroy(self.context, instance_ref['uuid'])
 
@@ -5557,24 +5547,14 @@ class LibvirtConnTestCase(test.TestCase):
                             None,
                             _bandwidth).AndRaise(libvirt.libvirtError("ERR"))
 
-        def fake_lookup(instance_name):
-            if instance_name == instance_ref['name']:
-                return vdmock
-
-        self.create_fake_libvirt_mock(lookupByName=fake_lookup)
-        self.mox.StubOutWithMock(self.compute, "_rollback_live_migration")
-        self.compute._rollback_live_migration(self.context, instance_ref,
-                                              'dest', False)
-
         # start test
         migrate_data = {}
         self.mox.ReplayAll()
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(libvirt.libvirtError,
-                      conn._live_migration,
-                      self.context, instance_ref, 'dest', False,
-                      self.compute._rollback_live_migration,
-                      migrate_data=migrate_data)
+                      conn._live_migration_operation,
+                      self.context, instance_ref, 'dest',
+                      False, migrate_data, vdmock)
 
         db.instance_destroy(self.context, instance_ref['uuid'])
 
@@ -5593,15 +5573,6 @@ class LibvirtConnTestCase(test.TestCase):
         vdmock = self.mox.CreateMock(libvirt.virDomain)
         self.mox.StubOutWithMock(vdmock, "migrateToURI")
 
-        def fake_lookup(instance_name):
-            if instance_name == instance_ref['name']:
-                return vdmock
-
-        self.create_fake_libvirt_mock(lookupByName=fake_lookup)
-        self.mox.StubOutWithMock(self.compute, "_rollback_live_migration")
-        self.compute._rollback_live_migration(self.context, instance_ref,
-                                              'dest', False)
-
         # start test
         migrate_data = {'pre_live_migration_result':
                 {'graphics_listen_addrs':
@@ -5609,10 +5580,9 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.MigrationError,
-                      conn._live_migration,
-                      self.context, instance_ref, 'dest', False,
-                      self.compute._rollback_live_migration,
-                      migrate_data=migrate_data)
+                      conn._live_migration_operation,
+                      self.context, instance_ref, 'dest',
+                      False, migrate_data, vdmock)
 
         db.instance_destroy(self.context, instance_ref['uuid'])
 
@@ -5648,15 +5618,6 @@ class LibvirtConnTestCase(test.TestCase):
                                  _bandwidth).AndRaise(
                                          libvirt.libvirtError('ERR'))
 
-        def fake_lookup(instance_name):
-            if instance_name == instance_ref['name']:
-                return vdmock
-
-        self.create_fake_libvirt_mock(lookupByName=fake_lookup)
-        self.mox.StubOutWithMock(self.compute, "_rollback_live_migration")
-        self.compute._rollback_live_migration(self.context, instance_ref,
-                                              'dest', False)
-
         # start test
         migrate_data = {'pre_live_migration_result':
                 {'graphics_listen_addrs':
@@ -5664,10 +5625,9 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(libvirt.libvirtError,
-                      conn._live_migration,
-                      self.context, instance_ref, 'dest', False,
-                      self.compute._rollback_live_migration,
-                      migrate_data=migrate_data)
+                      conn._live_migration_operation,
+                      self.context, instance_ref, 'dest',
+                      False, migrate_data, vdmock)
 
         instance_ref = db.instance_get(self.context, instance_ref['id'])
         self.assertEqual(vm_states.ACTIVE, instance_ref['vm_state'])
@@ -5705,15 +5665,6 @@ class LibvirtConnTestCase(test.TestCase):
                             mox.IgnoreArg(), None,
                             _bandwidth).AndRaise(test.TestingException('oops'))
 
-        def fake_lookup(instance_name):
-            if instance_name == instance_ref.name:
-                return vdmock
-
-        self.create_fake_libvirt_mock(lookupByName=fake_lookup)
-
-        def fake_recover_method(context, instance, dest, block_migration):
-            pass
-
         graphics_listen_addrs = {'vnc': '0.0.0.0', 'spice': '127.0.0.1'}
         migrate_data = {'pre_live_migration_result':
                 {'graphics_listen_addrs': graphics_listen_addrs}}
@@ -5725,10 +5676,10 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.ReplayAll()
 
         # start test
-        self.assertRaises(test.TestingException, conn._live_migration,
-                          self.context, instance_ref, 'dest', post_method=None,
-                          recover_method=fake_recover_method,
-                          migrate_data=migrate_data)
+        self.assertRaises(test.TestingException,
+                          conn._live_migration_operation,
+                          self.context, instance_ref, 'dest',
+                          False, migrate_data, vdmock)
 
     def test_rollback_live_migration_at_destination(self):
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -5737,6 +5688,185 @@ class LibvirtConnTestCase(test.TestCase):
                     "instance", [], None, True, None)
             mock_destroy.assert_called_once_with("context",
                     "instance", [], None, True, None)
+
+    @mock.patch.object(time, "sleep",
+                       side_effect=lambda x: eventlet.sleep(0))
+    @mock.patch.object(host.DomainJobInfo, "for_domain")
+    def _test_live_migration_monitoring(self,
+                                        job_info_records,
+                                        expect_success,
+                                        mock_job_info,
+                                        mock_sleep):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = self.create_instance_obj(self.context)
+        dom = FakeVirtDomain("<domain/>", running=True)
+        finish_event = eventlet.event.Event()
+
+        def fake_job_info(hostself):
+            while True:
+                self.assertTrue(len(job_info_records) > 0)
+                rec = job_info_records.pop()
+                if type(rec) == str:
+                    if rec == "thread-finish":
+                        finish_event.send()
+                    elif rec == "domain-stop":
+                        dom.destroy()
+                else:
+                    return rec
+            return rec
+
+        mock_job_info.side_effect = fake_job_info
+
+        def fake_post_method(self, *args, **kwargs):
+            fake_post_method.called = True
+
+        def fake_recover_method(self, *args, **kwargs):
+            fake_recover_method.called = True
+
+        fake_post_method.called = False
+        fake_recover_method.called = False
+
+        drvr._live_migration_monitor(self.context, instance,
+                                     "somehostname",
+                                     fake_post_method,
+                                     fake_recover_method,
+                                     False,
+                                     {},
+                                     dom,
+                                     finish_event)
+
+        self.assertEqual(fake_post_method.called, expect_success)
+        self.assertEqual(fake_recover_method.called, not expect_success)
+
+    def test_live_migration_monitor_success(self):
+        # A normal sequence where see all the normal job states
+        domain_info_records = [
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_NONE),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            "thread-finish",
+            "domain-stop",
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_COMPLETED),
+        ]
+
+        self._test_live_migration_monitoring(domain_info_records, True)
+
+    def test_live_migration_monitor_success_race(self):
+        # A normalish sequence but we're too slow to see the
+        # completed job state
+        domain_info_records = [
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_NONE),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            "thread-finish",
+            "domain-stop",
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_NONE),
+        ]
+
+        self._test_live_migration_monitoring(domain_info_records, True)
+
+    def test_live_migration_monitor_failed(self):
+        # A failed sequence where we see all the expected events
+        domain_info_records = [
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_NONE),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            "thread-finish",
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_FAILED),
+        ]
+
+        self._test_live_migration_monitoring(domain_info_records, False)
+
+    def test_live_migration_monitor_failed_race(self):
+        # A failed sequence where we are too slow to see the
+        # failed event
+        domain_info_records = [
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_NONE),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            "thread-finish",
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_NONE),
+        ]
+
+        self._test_live_migration_monitoring(domain_info_records, False)
+
+    def test_live_migration_monitor_cancelled(self):
+        # A cancelled sequence where we see all the events
+        domain_info_records = [
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_NONE),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_UNBOUNDED),
+            "thread-finish",
+            "domain-stop",
+            host.DomainJobInfo(
+                type=libvirt.VIR_DOMAIN_JOB_CANCELLED),
+        ]
+
+        self._test_live_migration_monitoring(domain_info_records, False)
+
+    @mock.patch.object(greenthread, "spawn")
+    @mock.patch.object(libvirt_driver.LibvirtDriver, "_live_migration_monitor")
+    @mock.patch.object(libvirt_driver.LibvirtDriver, "_lookup_by_name")
+    def test_live_migration_main(self, mock_dom,
+                                 mock_monitor, mock_thread):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = self.create_instance_obj(self.context)
+        dom = FakeVirtDomain("<domain/>", running=True)
+        migrate_data = {}
+
+        mock_dom.return_value = dom
+
+        def fake_post():
+            pass
+
+        def fake_recover():
+            pass
+
+        drvr._live_migration(self.context, instance, "fakehost",
+                             fake_post, fake_recover, False,
+                             migrate_data)
+
+        class AnyEventletEvent(object):
+            def __eq__(self, other):
+                return type(other) == eventlet.event.Event
+
+        mock_thread.assert_called_once_with(
+            drvr._live_migration_operation,
+            self.context, instance, "fakehost", False,
+            migrate_data, dom)
+        mock_monitor.assert_called_once_with(
+            self.context, instance, "fakehost",
+            fake_post, fake_recover, False,
+            migrate_data, dom, AnyEventletEvent())
 
     def _do_test_create_images_and_backing(self, disk_type):
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -11628,7 +11758,7 @@ class LibvirtDriverTestCase(test.TestCase):
             pass
 
         def fake_create_domain(context, xml, instance, network_info,
-                               disk_info, block_device_info=None,
+                               block_device_info=None,
                                power_on=None,
                                vifs_already_plugged=None):
             self.fake_create_domain_called = True
@@ -11702,7 +11832,7 @@ class LibvirtDriverTestCase(test.TestCase):
         self.stubs.Set(self.libvirtconnection, '_get_guest_xml',
                        lambda *a, **k: None)
         self.stubs.Set(self.libvirtconnection, '_create_domain_and_network',
-                       lambda *a: None)
+                       lambda *a, **k: None)
         self.stubs.Set(loopingcall, 'FixedIntervalLoopingCall',
                        lambda *a, **k: FakeLoopingCall())
 
