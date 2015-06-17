@@ -4136,8 +4136,15 @@ class VolumeAttachmentsSampleJsonTest(VolumeAttachmentsSampleBase):
     def test_volume_attachment_detail(self):
         server_id = self._post_server()
         attach_id = "a26887c6-c47b-4654-abb5-dfadf7d3f803"
+        attachments = [{'device': '/dev/sdd',
+                        'serverId': server_id,
+                        'id': attach_id,
+                        'volumeId': attach_id
+                      }]
+        volume = fakes.stub_volume(attach_id, attachments=attachments)
         self._stub_db_bdms_get_all_by_instance(server_id)
         self._stub_compute_api_get()
+        self.stubs.Set(cinder.API, 'get', lambda *a, **k: volume)
         response = self._do_get('servers/%s/os-volume_attachments/%s'
                                 % (server_id, attach_id))
         subs = self._get_regexes()
@@ -4206,6 +4213,13 @@ class VolumesSampleJsonTest(ServersSampleBase):
                   'mountpoint': '/',
                   'status': 'in-use',
                   'attach_status': 'attached',
+                  'attachments': [
+                      {'device': '/dev/sdb',
+                       'serverId': '3912f2b4-c5ba-4aec-9165-872876fe202e',
+                       'id': id,
+                       'volumeId': id
+                      }
+                  ],
                   'name': 'vol name',
                   'display_name': displayname,
                   'display_description': displaydesc,

@@ -3,7 +3,7 @@
         {
             "attachments": [
                 {
-                    "device": "/",
+                    "device": "/dev/sdb",
                     "id": "%(uuid)s",
                     "serverId": "%(uuid)s",
                     "volumeId": "%(uuid)s"

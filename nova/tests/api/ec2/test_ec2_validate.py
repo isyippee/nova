@@ -178,7 +178,8 @@ class EC2ValidateTestCase(test.TestCase):
             self.assertRaises(e,
                               self.cloud.detach_volume,
                               context=self.context,
-                              volume_id=ec2_id)
+                              volume_id=ec2_id,
+                              instance_id='FAKE_ID')
 
 
 class EC2TimestampValidationTestCase(test.NoDBTestCase):

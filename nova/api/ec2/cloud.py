@@ -805,35 +805,39 @@ class CloudController(object):
         return {'volumeSet': volumes}
 
     def _format_volume(self, context, volume):
+        # format an openstack volume into ec2 format
+        # openstack to ec2 volume status mapping
         valid_ec2_api_volume_status_map = {
             'attaching': 'in-use',
             'detaching': 'in-use'}
 
-        instance_ec2_id = None
-
-        if volume.get('instance_uuid', None):
-            instance_uuid = volume['instance_uuid']
-            # Make sure instance exists
-            objects.Instance.get_by_uuid(context.elevated(), instance_uuid)
-
-            instance_ec2_id = ec2utils.id_to_ec2_inst_id(instance_uuid)
-
         v = {}
         v['volumeId'] = ec2utils.id_to_ec2_vol_id(volume['id'])
-        v['status'] = valid_ec2_api_volume_status_map.get(volume['status'],
+        v['state'] = valid_ec2_api_volume_status_map.get(volume['status'],
                                                           volume['status'])
         v['size'] = volume['size']
         v['availabilityZone'] = volume['availability_zone']
         v['createTime'] = volume['created_at']
-        if volume['attach_status'] == 'attached':
-            v['attachmentSet'] = [{'attachTime': volume['attach_time'],
-                                   'deleteOnTermination': False,
-                                   'device': volume['mountpoint'],
-                                   'instanceId': instance_ec2_id,
-                                   'status': 'attached',
-                                   'volumeId': v['volumeId']}]
-        else:
-            v['attachmentSet'] = [{}]
+
+        # Default return is empty attachments list
+        v['attachments'] = []
+        attachments = volume.get('attachments')
+
+        # always return attachments regardless of volume status
+        if attachments:
+            for attachment in attachments:
+                attachment_ec2_ints_id = ec2utils.id_to_ec2_inst_id(
+                    attachment.get('instance_uuid'))
+                a = {
+                     'attachTime': attachment.get('attachTime'),
+                     'device': attachment.get('mountpoint'),
+                     'instanceId': attachment_ec2_ints_id,
+                     'state': volume['attach_status'],
+                     'volumeId': v['volumeId'],
+                     'deleteOnTermination': False
+                    }
+                v['attachments'].append(a)
+
         if volume.get('snapshot_id') is not None:
             v['snapshotId'] = ec2utils.id_to_ec2_snap_id(volume['snapshot_id'])
         else:
@@ -884,6 +888,7 @@ class CloudController(object):
                       volume_id,
                       instance_id,
                       device, **kwargs):
+        # attach volume to instance_id
         validate_instance_id(instance_id)
         validate_volume_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
@@ -899,42 +904,30 @@ class CloudController(object):
 
         self.compute_api.attach_volume(context, instance, volume_id, device)
         volume = self.volume_api.get(context, volume_id)
-        ec2_attach_status = ec2utils.status_to_ec2_attach_status(volume)
+        ec2_formatted_volume = self._format_volume(context, volume)
+        return ec2_formatted_volume
 
-        return {'attachTime': volume['attach_time'],
-                'device': volume['mountpoint'],
-                'instanceId': ec2utils.id_to_ec2_inst_id(instance_uuid),
-                'requestId': context.request_id,
-                'status': ec2_attach_status,
-                'volumeId': ec2utils.id_to_ec2_vol_id(volume_id)}
-
-    def _get_instance_from_volume(self, context, volume):
-        if volume.get('instance_uuid'):
+    def _get_instance_from_volume(self, context, volume, instance_id):
+        attachments = volume.get('attachments')
+        if attachments:
             try:
-                inst_uuid = volume['instance_uuid']
-                return objects.Instance.get_by_uuid(context, inst_uuid)
+                instance_uuid = ec2utils.ec2_inst_id_to_uuid(context,
+                                                             instance_id)
+                return objects.Instance.get_by_uuid(context, instance_uuid)
             except exception.InstanceNotFound:
                 pass
         raise exception.VolumeUnattached(volume_id=volume['id'])
 
-    def detach_volume(self, context, volume_id, **kwargs):
+    def detach_volume(self, context, volume_id, instance_id):
         validate_volume_id(volume_id)
         volume_id = ec2utils.ec2_vol_id_to_uuid(volume_id)
         LOG.audit(_("Detach volume %s"), volume_id, context=context)
         volume = self.volume_api.get(context, volume_id)
-        instance = self._get_instance_from_volume(context, volume)
 
+        instance = self._get_instance_from_volume(context, volume, instance_id)
         self.compute_api.detach_volume(context, instance, volume)
-        resp_volume = self.volume_api.get(context, volume_id)
-        ec2_attach_status = ec2utils.status_to_ec2_attach_status(resp_volume)
-
-        return {'attachTime': volume['attach_time'],
-                'device': volume['mountpoint'],
-                'instanceId': ec2utils.id_to_ec2_inst_id(
-                    volume['instance_uuid']),
-                'requestId': context.request_id,
-                'status': ec2_attach_status,
-                'volumeId': ec2utils.id_to_ec2_vol_id(volume_id)}
+        ec2_formatted_volume = self._format_volume(context, volume)
+        return ec2_formatted_volume
 
     def _format_kernel_id(self, context, instance_ref, result, key):
         kernel_uuid = instance_ref['kernel_id']
