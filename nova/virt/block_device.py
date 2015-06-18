@@ -235,6 +235,9 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
             connection_info['serial'] = self.volume_id
         self._preserve_multipath_id(connection_info)
 
+        if volume.get('multiattach', False):
+            connection_info['multiattach'] = True
+
         # If do_driver_attach is False, we will attach a volume to an instance
         # at boot time. So actual attach is done by instance creation code.
         if do_driver_attach:
@@ -260,14 +263,13 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
         mode = 'rw'
         if 'data' in connection_info:
             mode = connection_info['data'].get('access_mode', 'rw')
-        if volume['attach_status'] == "detached":
-            # NOTE(mriedem): save our current state so connection_info is in
-            # the database before the volume status goes to 'in-use' because
-            # after that we can detach and connection_info is required for
-            # detach.
-            self.save()
-            volume_api.attach(context, volume_id, instance.uuid,
-                              self['mount_device'], mode=mode)
+        # NOTE(mriedem): save our current state so connection_info is in
+        # the database before the volume status goes to 'in-use' because
+        # after that we can detach and connection_info is required for
+        # detach.
+        self.save()
+        volume_api.attach(context, volume_id, instance.uuid,
+                          self['mount_device'], mode=mode)
 
     @update_db
     def refresh_connection_info(self, context, instance,
