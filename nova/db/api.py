@@ -1214,6 +1214,14 @@ def block_device_mapping_get_all_by_instance(context, instance_uuid,
                                                          use_slave)
 
 
+def block_device_mapping_get_by_instance_and_volume_id(context, volume_id,
+                                                       instance_uuid,
+                                                       columns_to_join=None):
+    """Get block device mapping for a given volume ID and instance UUID."""
+    return IMPL.block_device_mapping_get_by_instance_and_volume_id(
+        context, volume_id, instance_uuid, columns_to_join)
+
+
 def block_device_mapping_get_by_volume_id(context, volume_id,
         columns_to_join=None):
     """Get block device mapping for a given volume."""

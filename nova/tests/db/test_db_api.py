@@ -4820,6 +4820,26 @@ class BlockDeviceMappingTestCase(test.TestCase):
         self.assertEqual(bdm['volume_id'], 'fake_id')
         self.assertEqual(bdm['instance']['uuid'], self.instance['uuid'])
 
+    def test_block_device_mapping_get_by_instance_and_volume_id(self):
+        self._create_bdm({'volume_id': 'fake_id'})
+        bdm = db.block_device_mapping_get_by_instance_and_volume_id(self.ctxt,
+                'fake_id', self.instance['uuid'])
+        self.assertEqual(bdm['volume_id'], 'fake_id')
+        self.assertEqual(bdm['instance_uuid'], self.instance['uuid'])
+
+    def test_block_device_mapping_get_by_instance_and_volume_id_multiattach(
+            self):
+        instance_uuid1 = '69f5c254-1a5b-4fff-acf7-cb369904f58f'
+        instance_uuid2 = '69f5c254-1a5b-4fff-acf7-cb369904f59f'
+        self._create_bdm({'volume_id': 'fake_id',
+                          'instance_uuid': instance_uuid1})
+        self._create_bdm({'volume_id': 'fake_id',
+                          'instance_uuid': instance_uuid2})
+        bdm = db.block_device_mapping_get_by_instance_and_volume_id(self.ctxt,
+                'fake_id', instance_uuid2)
+        self.assertEqual(bdm['volume_id'], 'fake_id')
+        self.assertEqual(bdm['instance_uuid'], instance_uuid2)
+
 
 class AgentBuildTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
