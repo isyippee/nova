@@ -67,7 +67,9 @@ class fake_volume():
             'display_description': description,
             'provider_location': 'fake-location',
             'provider_auth': 'fake-auth',
-            'volume_type_id': 99
+            'volume_type_id': 99,
+            'attachments': [],
+            'multiattach': False
             }
 
     def get(self, key, default=None):
@@ -204,10 +206,12 @@ class API(object):
         LOG.info('attaching volume %s', volume_id)
         volume = self.get(context, volume_id)
         volume['status'] = 'in-use'
-        volume['mountpoint'] = mountpoint
         volume['attach_status'] = 'attached'
-        volume['instance_uuid'] = instance_uuid
         volume['attach_time'] = timeutils.utcnow()
+        attachment = {'attachment_id': str(uuid.uuid4()),
+                      'mountpoint': mountpoint,
+                      'instance_uuid': instance_uuid}
+        volume['attachments'] = [attachment]
 
     def fake_set_snapshot_id(self, context, volume, snapshot_id):
         volume['snapshot_id'] = snapshot_id
@@ -216,13 +220,21 @@ class API(object):
         del self.volume_list[:]
         del self.snapshot_list[:]
 
-    def detach(self, context, volume_id):
+    def detach(self, context, volume_id, attachment_id):
         LOG.info('detaching volume %s', volume_id)
         volume = self.get(context, volume_id)
         volume['status'] = 'available'
-        volume['mountpoint'] = None
         volume['attach_status'] = 'detached'
-        volume['instance_uuid'] = None
+        volume['attachments'] = []
+
+    def get_volume_attachment(self, volume, instance_uuid):
+        attachments = volume['attachments']
+        attachment = None
+        for attach in attachments:
+            if attach['instance_uuid'] == instance_uuid:
+                attachment = attach
+                break
+        return attachment
 
     def initialize_connection(self, context, volume_id, connector):
         return {'driver_volume_type': 'iscsi', 'data': {}}

@@ -2385,7 +2385,12 @@ class ComputeManager(manager.Manager):
                 self.volume_api.terminate_connection(context,
                                                      bdm.volume_id,
                                                      connector)
-                self.volume_api.detach(context, bdm.volume_id)
+                volume = self.volume_api.get(context, bdm.volume_id)
+                # find the attachment id for the instance.
+                attachment = self.volume_api.get_volume_attachment(
+                    volume, instance['uuid'])
+                self.volume_api.detach(context, bdm.volume_id,
+                                       attachment['attachment_id'])
             except exception.DiskNotFound as exc:
                 LOG.debug('Ignoring DiskNotFound: %s', exc,
                           instance=instance)
@@ -4526,8 +4531,9 @@ class ComputeManager(manager.Manager):
                       instance, bdm=None):
         """Attach a volume to an instance."""
         if not bdm:
-            bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                    context, volume_id)
+            bdm = objects.BlockDeviceMapping.\
+                    get_by_instance_and_volume_id(context, volume_id,
+                                                  instance.uuid)
         driver_bdm = driver_block_device.DriverVolumeBlockDevice(bdm)
 
         @utils.synchronized(instance.uuid)
@@ -4602,8 +4608,9 @@ class ComputeManager(manager.Manager):
     @wrap_instance_fault
     def detach_volume(self, context, volume_id, instance):
         """Detach a volume from an instance."""
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                context, volume_id)
+        bdm = objects.BlockDeviceMapping.\
+                get_by_instance_and_volume_id(context, volume_id,
+                                              instance.uuid)
         if CONF.volume_usage_poll_interval > 0:
             vol_stats = []
             mp = bdm.device_name
@@ -4627,12 +4634,16 @@ class ComputeManager(manager.Manager):
 
         self._detach_volume(context, instance, bdm)
         connector = self.driver.get_volume_connector(instance)
+        volume = self.volume_api.get(context, volume_id)
         self.volume_api.terminate_connection(context, volume_id, connector)
+        attachment = self.volume_api.get_volume_attachment(volume,
+                                                           instance.uuid)
         bdm.destroy()
         info = dict(volume_id=volume_id)
         self._notify_about_instance_usage(
             context, instance, "volume.detach", extra_usage_info=info)
-        self.volume_api.detach(context.elevated(), volume_id)
+        self.volume_api.detach(context.elevated(), volume_id,
+            attachment['attachment_id'])
 
     def _init_volume_connection(self, context, new_volume_id,
                                 old_volume_id, connector, instance, bdm):
@@ -4707,8 +4718,9 @@ class ComputeManager(manager.Manager):
         """Swap volume for an instance."""
         context = context.elevated()
 
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                context, old_volume_id, instance_uuid=instance.uuid)
+        bdm = objects.BlockDeviceMapping.get_by_instance_and_volume_id(
+                                                context, old_volume_id,
+                                                instance.uuid)
         connector = self.driver.get_volume_connector(instance)
         comp_ret, new_cinfo = self._swap_volume(context, instance,
                                                          bdm,
@@ -4747,8 +4759,8 @@ class ComputeManager(manager.Manager):
                     expected_attrs=metas)
             instance._context = context
         try:
-            bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                    context, volume_id)
+            bdm = objects.BlockDeviceMapping.get_by_instance_and_volume_id(
+                    context, volume_id, instance.uuid)
             self._detach_volume(context, instance, bdm)
             connector = self.driver.get_volume_connector(instance)
             self.volume_api.terminate_connection(context, volume_id, connector)

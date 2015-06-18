@@ -1085,22 +1085,26 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         volumes[old_volume_id] = {'id': old_volume_id,
                                   'display_name': 'old_volume',
                                   'status': 'detaching',
-                                  'size': 1}
+                                  'size': 1,
+                                  'attachments': [{'attachment_id': 'abc123',
+                                                   'volume_id': old_volume_id,
+                                                   'instance_uuid': 'fake'}]}
         new_volume_id = uuidutils.generate_uuid()
         volumes[new_volume_id] = {'id': new_volume_id,
                                   'display_name': 'new_volume',
                                   'status': 'available',
-                                  'size': 2}
+                                  'size': 2,
+                                  'attachments': []}
 
         def fake_vol_api_roll_detaching(context, volume_id):
             self.assertTrue(uuidutils.is_uuid_like(volume_id))
             if volumes[volume_id]['status'] == 'detaching':
                 volumes[volume_id]['status'] = 'in-use'
 
-        fake_bdm = fake_block_device.FakeDbBlockDeviceDict(
-                   {'device_name': '/dev/vdb', 'source_type': 'volume',
-                    'destination_type': 'volume', 'instance_uuid': 'fake',
-                    'connection_info': '{"foo": "bar"}'})
+        fake_bdm_dict = fake_block_device.FakeDbBlockDeviceDict(
+            {'device_name': '/dev/vdb', 'source_type': 'volume',
+             'destination_type': 'volume', 'instance_uuid': 'fake',
+             'connection_info': '{"foo": "bar"}'})
 
         def fake_vol_api_func(context, volume, *args):
             self.assertTrue(uuidutils.is_uuid_like(volume))
@@ -1138,8 +1142,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                        fake_vol_unreserve)
         self.stubs.Set(self.compute.volume_api, 'terminate_connection',
                        fake_vol_api_func)
-        self.stubs.Set(db, 'block_device_mapping_get_by_volume_id',
-                       lambda x, y, z: fake_bdm)
+        self.stubs.Set(db,
+                       'block_device_mapping_get_by_instance_and_volume_id',
+                       lambda *a, **k: fake_bdm_dict)
         self.stubs.Set(self.compute.driver, 'get_volume_connector',
                        lambda x: {})
         self.stubs.Set(self.compute.driver, 'swap_volume',
@@ -1147,7 +1152,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.stubs.Set(self.compute.volume_api, 'migrate_volume_completion',
                       fake_vol_migrate_volume_completion)
         self.stubs.Set(db, 'block_device_mapping_update',
-                       lambda *a, **k: fake_bdm)
+                       lambda *a, **k: fake_bdm_dict)
         self.stubs.Set(db,
                        'instance_fault_create',
                        lambda x, y:
@@ -1441,18 +1446,21 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             self.assertFalse(allow_reboot)
             self.assertEqual(reboot_type, 'HARD')
 
-    @mock.patch('nova.objects.BlockDeviceMapping.get_by_volume_id')
+    @mock.patch('nova.objects.BlockDeviceMapping.'
+                'get_by_instance_and_volume_id')
     @mock.patch('nova.compute.manager.ComputeManager._detach_volume')
     @mock.patch('nova.objects.Instance._from_db_object')
     def test_remove_volume_connection(self, inst_from_db, detach, bdm_get):
         bdm = mock.sentinel.bdm
-        inst_obj = mock.sentinel.inst_obj
+        inst_obj = mock.Mock()
+        inst_obj.uuid = 'uuid'
         bdm_get.return_value = bdm
         inst_from_db.return_value = inst_obj
         with mock.patch.object(self.compute, 'volume_api'):
             self.compute.remove_volume_connection(self.context, 'vol',
                                                   inst_obj)
         detach.assert_called_once_with(self.context, inst_obj, bdm)
+        bdm_get.assert_called_once_with(self.context, 'vol', 'uuid')
 
     def _test_rescue(self, clean_shutdown=True):
         instance = fake_instance.fake_instance_obj(

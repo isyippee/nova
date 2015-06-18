@@ -27,6 +27,7 @@ from cinderclient.v1 import client as v1_client
 from keystoneclient import exceptions as keystone_exception
 from keystoneclient import session
 from oslo.config import cfg
+import six
 import six.moves.urllib.parse as urlparse
 
 from nova import availability_zones as az
@@ -38,17 +39,13 @@ from nova.openstack.common import strutils
 
 cinder_opts = [
     cfg.StrOpt('catalog_info',
-            default='volume:cinder:publicURL',
+            default='volumev2:cinderv2:publicURL',
             help='Info to match when looking for cinder in the service '
                  'catalog. Format is: separated values of the form: '
-                 '<service_type>:<service_name>:<endpoint_type>',
-            deprecated_group='DEFAULT',
-            deprecated_name='cinder_catalog_info'),
+                 '<service_type>:<service_name>:<endpoint_type>'),
     cfg.StrOpt('endpoint_template',
                help='Override service catalog lookup with template for cinder '
-                    'endpoint e.g. http://localhost:8776/v1/%(project_id)s',
-               deprecated_group='DEFAULT',
-               deprecated_name='cinder_endpoint_template'),
+                    'endpoint e.g. http://localhost:8776/v1/%(project_id)s'),
     cfg.StrOpt('os_region_name',
                help='Region name of this node'),
     cfg.IntOpt('http_retries',
@@ -57,9 +54,7 @@ cinder_opts = [
     cfg.BoolOpt('cross_az_attach',
                 default=True,
                 help='Allow attach between instance and volume in different '
-                     'availability zones.',
-                deprecated_group='DEFAULT',
-                deprecated_name='cinder_cross_az_attach'),
+                     'availability zones.'),
 ]
 
 CONF = cfg.CONF
@@ -103,7 +98,6 @@ def cinderclient(context):
 
     url = None
     endpoint_override = None
-    version = None
 
     auth = context.get_auth_plugin()
     service_type, service_name, interface = CONF.cinder.catalog_info.split(':')
@@ -128,7 +122,7 @@ def cinderclient(context):
         msg = _LW('Cinder V1 API is deprecated as of the Juno '
                   'release, and Nova is still configured to use it. '
                   'Enable the V2 API in Cinder and set '
-                  'cinder_catalog_info in nova.conf to use it.')
+                  'cinder.catalog_info in nova.conf to use it.')
         LOG.warn(msg)
         _V1_ERROR_RAISED = True
 
@@ -155,12 +149,20 @@ def _untranslate_volume_summary_view(context, vol):
     #            removed.
     d['attach_time'] = ""
     d['mountpoint'] = ""
+    d['multiattach'] = getattr(vol, 'multiattach', False)
 
     if vol.attachments:
-        att = vol.attachments[0]
+        d['attachments'] = []
+        for attach in vol.attachments:
+            attachment_id = attach.get('attachment_id')
+            a = {'attach_status': 'attached',
+                 'attachment_id': attachment_id,
+                 'instance_uuid': attach['server_id'],
+                 'mountpoint': attach['device'],
+                 }
+            d['attachments'].append(a)
+
         d['attach_status'] = 'attached'
-        d['instance_uuid'] = att['server_id']
-        d['mountpoint'] = att['device']
     else:
         d['attach_status'] = 'detached'
     # NOTE(dzyu) volume(cinder) v2 API uses 'name' instead of 'display_name',
@@ -225,14 +227,15 @@ def translate_volume_exception(method):
                 exc_value = exception.VolumeNotFound(volume_id=volume_id)
             elif isinstance(exc_value, (keystone_exception.BadRequest,
                                         cinder_exception.BadRequest)):
-                exc_value = exception.InvalidInput(reason=exc_value.message)
-            raise exc_value, None, exc_trace
+                exc_value = exception.InvalidInput(
+                    reason=six.text_type(exc_value))
+            six.reraise(exc_value, None, exc_trace)
         except (cinder_exception.ConnectionError,
                 keystone_exception.ConnectionError):
             exc_type, exc_value, exc_trace = sys.exc_info()
             exc_value = exception.CinderConnectionFailed(
-                                                   reason=exc_value.message)
-            raise exc_value, None, exc_trace
+                reason=six.text_type(exc_value))
+            six.reraise(exc_value, None, exc_trace)
         return res
     return wrapper
 
@@ -250,13 +253,13 @@ def translate_snapshot_exception(method):
             if isinstance(exc_value, (keystone_exception.NotFound,
                                       cinder_exception.NotFound)):
                 exc_value = exception.SnapshotNotFound(snapshot_id=snapshot_id)
-            raise exc_value, None, exc_trace
+            six.reraise(exc_value, None, exc_trace)
         except (cinder_exception.ConnectionError,
                 keystone_exception.ConnectionError):
             exc_type, exc_value, exc_trace = sys.exc_info()
-            exc_value = exception.CinderConnectionFailed(
-                                                  reason=exc_value.message)
-            raise exc_value, None, exc_trace
+            reason = six.text_type(exc_value)
+            exc_value = exception.CinderConnectionFailed(reason=reason)
+            six.reraise(exc_value, None, exc_trace)
         return res
     return wrapper
 
@@ -308,15 +311,32 @@ class API(object):
             raise exception.InvalidVolume(reason=msg)
 
     def check_attach(self, context, volume, instance=None):
+
+        def get_instances_by_vol_attachments(volume):
+            return (attachment['instance_uuid']
+                    for attachment in volume['attachments']
+                    if attachment['attach_status'] == 'attached')
+
         # TODO(vish): abstract status checking?
-        if volume['status'] != "available":
-            msg = _("volume '%(vol)s' status must be 'available'. Currently "
-                    "in '%(status)s'") % {'vol': volume['id'],
-                                          'status': volume['status']}
-            raise exception.InvalidVolume(reason=msg)
-        if volume['attach_status'] == "attached":
-            msg = _("volume %s already attached") % volume['id']
-            raise exception.InvalidVolume(reason=msg)
+        # Cinder supports multi-attach when a volume
+        # has been marked as multiattach
+        if volume.get('multiattach', False):
+            if (volume['status'] not in ("available", 'in-use')):
+                msg = _("multiattach volume's status must be"
+                        "'available' or 'in-use'")
+                raise exception.InvalidVolume(reason=msg)
+            if instance and volume.get('attachments'):
+                if instance.uuid in get_instances_by_vol_attachments(volume):
+                    msg = _("volume is already attached")
+                    raise exception.InvalidVolume(reason=msg)
+        else:
+            if volume['status'] != "available":
+                msg = _("status must be 'available'")
+                raise exception.InvalidVolume(reason=msg)
+            if volume['attach_status'] == "attached":
+                msg = _("volume is already attached")
+                raise exception.InvalidVolume(reason=msg)
+
         if instance and not CONF.cinder.cross_az_attach:
             # NOTE(sorrison): If instance is on a host we match against it's AZ
             #                 else we check the intended AZ
@@ -363,8 +383,20 @@ class API(object):
                                              mountpoint, mode=mode)
 
     @translate_volume_exception
-    def detach(self, context, volume_id):
-        cinderclient(context).volumes.detach(volume_id)
+    def get_volume_attachment(self, volume, instance_uuid):
+        if 'attachments' in volume:
+            attachments = volume['attachments']
+        else:
+            attachments = {}
+            attach = {}
+        for attach in attachments:
+            if attach.get('instance_uuid', None) == instance_uuid:
+                break
+        return attach
+
+    @translate_volume_exception
+    def detach(self, context, volume_id, attachment_id):
+        cinderclient(context).volumes.detach(volume_id, attachment_id)
 
     @translate_volume_exception
     def initialize_connection(self, context, volume_id, connector):

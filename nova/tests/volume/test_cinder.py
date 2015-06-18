@@ -19,6 +19,8 @@ import mock
 from nova import context
 from nova import exception
 from nova import test
+from nova.tests.fake_instance import fake_instance_obj
+from nova.tests.fake_volume import fake_volume
 from nova.volume import cinder
 
 
@@ -55,6 +57,8 @@ class FakeVolume(object):
         self.volume_type_id = dict.get('volume_type_id')
         self.snapshot_id = dict.get('snapshot_id')
         self.metadata = dict.get('volume_metadata') or {}
+        self.multiattach = dict.get('multiattach') or False
+        self.attachments = dict.get('attachments') or []
 
 
 class CinderApiTestCase(test.NoDBTestCase):
@@ -129,18 +133,36 @@ class CinderApiTestCase(test.NoDBTestCase):
         self.assertEqual(['id1', 'id2'], self.api.get_all(self.ctx))
 
     def test_check_attach_volume_status_error(self):
-        volume = {'id': 'fake', 'status': 'error'}
+        volume = {'id': 'fake', 'status': 'error', 'multiattach': False}
+        self.assertRaises(exception.InvalidVolume,
+                          self.api.check_attach, self.ctx, volume)
+        volume = {'id': 'fake', 'status': 'error', 'multiattach': True}
         self.assertRaises(exception.InvalidVolume,
                           self.api.check_attach, self.ctx, volume)
 
     def test_check_attach_volume_already_attached(self):
-        volume = {'id': 'fake', 'status': 'available'}
+        volume = {'id': 'fake', 'status': 'available',
+                  'multiattach': False}
         volume['attach_status'] = "attached"
         self.assertRaises(exception.InvalidVolume,
                           self.api.check_attach, self.ctx, volume)
 
+    def test_check_attach_multiattach_volume_already_attached(self):
+        instance = fake_instance_obj(self.ctx)
+        volume = fake_volume(size=1, name='', description='', volume_id=None,
+                             snapshot=None, volume_type=None, metadata={},
+                             availability_zone='cinder')
+        volume.multiattach = True
+        volume.status = 'in-use'
+        volume.attach_status = 'attached'
+        volume.attachments = [{'instance_uuid': instance.uuid,
+                               'attach_status': 'attached'}]
+        self.assertRaises(exception.InvalidVolume,
+                          self.api.check_attach, self.ctx, volume, instance)
+
     def test_check_attach_availability_zone_differs(self):
-        volume = {'id': 'fake', 'status': 'available'}
+        volume = {'id': 'fake', 'status': 'available',
+                  'multiattach': False}
         volume['attach_status'] = "detached"
         instance = {'id': 'fake',
                     'availability_zone': 'zone1', 'host': 'fakehost'}
@@ -175,6 +197,7 @@ class CinderApiTestCase(test.NoDBTestCase):
         volume = {'status': 'available'}
         volume['attach_status'] = "detached"
         volume['availability_zone'] = 'zone1'
+        volume['multiattach'] = False
         instance = {'availability_zone': 'zone1', 'host': 'fakehost'}
         cinder.CONF.set_override('cross_az_attach', False, group='cinder')
 
@@ -254,10 +277,10 @@ class CinderApiTestCase(test.NoDBTestCase):
         cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)
         self.mox.StubOutWithMock(self.cinderclient.volumes,
                                  'detach')
-        self.cinderclient.volumes.detach('id1')
+        self.cinderclient.volumes.detach('id1', 'abc123')
         self.mox.ReplayAll()
 
-        self.api.detach(self.ctx, 'id1')
+        self.api.detach(self.ctx, 'id1', 'abc123')
 
     def test_initialize_connection(self):
         cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)

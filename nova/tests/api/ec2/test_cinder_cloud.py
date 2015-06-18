@@ -301,17 +301,40 @@ class CinderCloudTestCase(test.TestCase):
         vol1_uuid = ec2utils.ec2_vol_id_to_uuid(vol1['volumeId'])
         kwargs = {'image_id': 'ami-1',
                   'instance_type': CONF.default_flavor,
-                  'max_count': 1,
-                  'block_device_mapping': [{'device_name': '/dev/sdb',
-                                            'volume_id': vol1_uuid,
-                                            'delete_on_termination': True}]}
-        self._run_instance(**kwargs)
-        resp = self.cloud.detach_volume(self.context,
-                                        vol1['volumeId'])
+                  'max_count': 1}
+        ec2_instance_id = self._run_instance(**kwargs)
 
-        # Here,the status should be 'detaching',but it can be 'detached' in
-        # unittest scenario if the detach action is very fast.
-        self.assertIn(resp['status'], ('detaching', 'detached'))
+        # NOTE(ft): Since fake detach action is very fast, we replace it to
+        # empty function to check EC2 API results at 'detaching' stage
+
+        vol1 = self.cloud.attach_volume(self.context,
+                                        vol1['volumeId'],
+                                        ec2_instance_id,
+                                        '/dev/sde')
+
+        def fake_detach_volume(context, ec2_vol_id, instance_id):
+            vol_uuid = ec2utils.ec2_vol_id_to_uuid(ec2_vol_id)
+            volume = self.volume_api.get(context, vol_uuid)
+            volume['attachments'][0]['state'] = 'detaching'
+            ec2_vol = self.cloud._format_volume(context, volume)
+            return ec2_vol
+
+        self.stubs.Set(self.cloud, 'detach_volume', fake_detach_volume)
+
+        resp = self.cloud.detach_volume(self.context,
+                                        vol1['volumeId'],
+                                        ec2_instance_id)
+
+        self.assertEqual('in-use', resp['status'])
+        resp = self.cloud.describe_volumes(self.context, [vol1['volumeId']])
+        volume = resp['volumeSet'][0]
+        self.assertEqual('in-use', volume['status'])
+        # device and instanceId
+        self.assertThat({'status': 'attached',
+                         'volumeId': 'vol-00000001',
+                         'device': None,
+                         'instanceId': None},
+                         matchers.IsSubDictOf(volume['attachmentSet'][0]))
 
     def test_describe_snapshots(self):
         # Makes sure describe_snapshots works and filters results.
@@ -801,8 +824,9 @@ class CinderCloudTestCase(test.TestCase):
         return self.volume_api.create_with_kwargs(self.context, **kwargs)
 
     def _assert_volume_attached(self, vol, instance_uuid, mountpoint):
-        self.assertEqual(vol['instance_uuid'], instance_uuid)
-        self.assertEqual(vol['mountpoint'], mountpoint)
+        self.assertEqual(vol['attachments'][0].get('instance_uuid'),
+                         instance_uuid)
+        self.assertEqual(vol['attachments'][0].get('mountpoint'), mountpoint)
         self.assertEqual(vol['status'], "in-use")
         self.assertEqual(vol['attach_status'], "attached")
 
@@ -839,8 +863,12 @@ class CinderCloudTestCase(test.TestCase):
         ec2_instance_id = self._run_instance(**kwargs)
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(self.context,
                                                      ec2_instance_id)
-        vols = self.volume_api.get_all(self.context)
-        vols = [v for v in vols if v['instance_uuid'] == instance_uuid]
+        vols_dict = self.volume_api.get_all(self.context)
+        vols = []
+        for v in vols_dict:
+            if v['attachments'] != []:
+                if v['attachments'][0].get('instance_uuid') == instance_uuid:
+                    vols.append(v)
 
         self.assertEqual(len(vols), 2)
         for vol in vols:
@@ -864,20 +892,24 @@ class CinderCloudTestCase(test.TestCase):
         vol = self.volume_api.get(self.context, vol1_uuid)
         self._assert_volume_attached(vol, instance_uuid, '/dev/sdb')
 
-        vol = self.volume_api.get(self.context, vol1_uuid)
-        self._assert_volume_attached(vol, instance_uuid, '/dev/sdb')
-
         vol = self.volume_api.get(self.context, vol2_uuid)
         self._assert_volume_attached(vol, instance_uuid, '/dev/sdc')
 
         self.cloud.start_instances(self.context, [ec2_instance_id])
-        vols = self.volume_api.get_all(self.context)
-        vols = [v for v in vols if v['instance_uuid'] == instance_uuid]
+        vols_dict = self.volume_api.get_all(self.context)
+        vols = []
+        for v in vols_dict:
+            if v['attachments'] != []:
+                if v['attachments'][0].get('instance_uuid') == instance_uuid:
+                    vols.append(v)
+
         self.assertEqual(len(vols), 2)
         for vol in vols:
             self.assertIn(str(vol['id']), [str(vol1_uuid), str(vol2_uuid)])
-            self.assertIn(vol['mountpoint'], ['/dev/sdb', '/dev/sdc'])
-            self.assertEqual(vol['instance_uuid'], instance_uuid)
+            self.assertIn(vol['attachments'][0].get('mountpoint'),
+                          ['/dev/sdb', '/dev/sdc'])
+            self.assertEqual(vol['attachments'][0].get('instance_uuid'),
+                             instance_uuid)
             self.assertEqual(vol['status'], "in-use")
             self.assertEqual(vol['attach_status'], "attached")
 
@@ -915,8 +947,13 @@ class CinderCloudTestCase(test.TestCase):
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(self.context,
                                                      ec2_instance_id)
 
-        vols = self.volume_api.get_all(self.context)
-        vols = [v for v in vols if v['instance_uuid'] == instance_uuid]
+        vols_dict = self.volume_api.get_all(self.context)
+        vols = []
+        for v in vols_dict:
+            if v['attachments'] != []:
+                if v['attachments'][0].get('instance_uuid') == instance_uuid:
+                    vols.append(v)
+
         self.assertEqual(len(vols), 1)
         for vol in vols:
             self.assertEqual(vol['id'], vol1_uuid)
@@ -949,8 +986,12 @@ class CinderCloudTestCase(test.TestCase):
         self._assert_volume_attached(vol2, instance_uuid, '/dev/sdc')
 
         self.cloud.start_instances(self.context, [ec2_instance_id])
-        vols = self.volume_api.get_all(self.context)
-        vols = [v for v in vols if v['instance_uuid'] == instance_uuid]
+        vols_dict = self.volume_api.get_all(self.context)
+        vols = []
+        for v in vols_dict:
+            if v['attachments'] != []:
+                if v['attachments'][0].get('instance_uuid') == instance_uuid:
+                    vols.append(v)
         self.assertEqual(len(vols), 1)
 
         self._assert_volume_detached(vol1)
@@ -999,8 +1040,12 @@ class CinderCloudTestCase(test.TestCase):
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(self.context,
                                                      ec2_instance_id)
 
-        vols = self.volume_api.get_all(self.context)
-        vols = [v for v in vols if v['instance_uuid'] == instance_uuid]
+        vols_dict = self.volume_api.get_all(self.context)
+        vols = []
+        for v in vols_dict:
+            if v['attachments'] != []:
+                if v['attachments'][0].get('instance_uuid') == instance_uuid:
+                    vols.append(v)
 
         self.assertEqual(len(vols), 2)
 

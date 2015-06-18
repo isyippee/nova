@@ -1727,7 +1727,11 @@ class API(base.Base):
                     self.volume_api.terminate_connection(context,
                                                          bdm.volume_id,
                                                          connector)
-                    self.volume_api.detach(elevated, bdm.volume_id)
+                    volume = self.volume_api.get(bdm.volume_id)
+                    attachment = self.volume_api.get_volume_attachment(
+                        volume, instance.uuid)
+                    self.volume_api.detach(elevated, bdm.volume_id,
+                                           attachment['id'])
                     if bdm.delete_on_termination:
                         self.volume_api.delete(context, bdm.volume_id)
                 except Exception as exc:
@@ -2943,10 +2947,18 @@ class API(base.Base):
         if volume['attach_status'] == 'detached':
             msg = _("Volume must be attached in order to detach.")
             raise exception.InvalidVolume(reason=msg)
-        # The caller likely got the instance from volume['instance_uuid']
-        # in the first place, but let's sanity check.
-        if volume['instance_uuid'] != instance['uuid']:
+
+        # Volumes may be attached to multiple hosts and/or instances,
+        # so just check the attachment specific to this instance
+        if volume['attachments']:
+            for attachment in volume['attachments']:
+                if attachment['instance_uuid'] == instance.uuid:
+                    break
+            else:
+                raise exception.VolumeUnattached(volume_id=volume['id'])
+        else:
             raise exception.VolumeUnattached(volume_id=volume['id'])
+
         self._detach_volume(context, instance, volume)
 
     @wrap_check_policy
