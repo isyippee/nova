@@ -129,6 +129,43 @@ class _TestBlockDeviceMappingObject(object):
                                               ['instance'])
         self.assertRemotes()
 
+    @mock.patch.object(db,
+                       'block_device_mapping_get_by_instance_and_volume_id')
+    def test_get_by_instance_and_volume_id(self, mock_get):
+        fake_inst = fake_instance.fake_db_instance()
+        mock_get.return_value = self.fake_bdm(fake_inst)
+
+        obj_bdm = objects.BlockDeviceMapping
+        vol_bdm = obj_bdm.get_by_instance_and_volume_id(
+            self.context, 'fake-volume-id', 'fake-instance-id')
+        for attr in block_device_obj.BLOCK_DEVICE_OPTIONAL_ATTRS:
+            self.assertFalse(vol_bdm.obj_attr_is_set(attr))
+
+    @mock.patch.object(db,
+                       'block_device_mapping_get_by_instance_and_volume_id')
+    def test_test_get_by_instance_and_volume_id_with_expected(self, mock_get):
+        fake_inst = fake_instance.fake_db_instance()
+        mock_get.return_value = self.fake_bdm(fake_inst)
+
+        obj_bdm = objects.BlockDeviceMapping
+        vol_bdm = obj_bdm.get_by_instance_and_volume_id(
+            self.context, 'fake-volume-id', fake_inst['uuid'],
+            expected_attrs=['instance'])
+        for attr in block_device_obj.BLOCK_DEVICE_OPTIONAL_ATTRS:
+            self.assertTrue(vol_bdm.obj_attr_is_set(attr))
+        mock_get.assert_called_once_with(self.context, 'fake-volume-id',
+                                         fake_inst['uuid'], ['instance'])
+
+    @mock.patch.object(db,
+                       'block_device_mapping_get_by_instance_and_volume_id')
+    def test_get_by_instance_and_volume_id_not_found(self, mock_get):
+        mock_get.return_value = None
+
+        obj_bdm = objects.BlockDeviceMapping
+        self.assertRaises(exception.VolumeBDMNotFound,
+                          obj_bdm.get_by_instance_and_volume_id,
+                          self.context, 'fake-volume-id', 'fake-instance-id')
+
     def _test_create_mocked(self, cell_type=None):
         if cell_type:
             self.flags(enable=True, cell_type=cell_type, group='cells')
