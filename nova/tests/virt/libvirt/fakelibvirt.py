@@ -162,6 +162,14 @@ VIR_CONNECT_LIST_DOMAINS_ACTIVE = 1
 VIR_CONNECT_LIST_DOMAINS_INACTIVE = 2
 
 
+VIR_DOMAIN_JOB_NONE = 0
+VIR_DOMAIN_JOB_BOUNDED = 1
+VIR_DOMAIN_JOB_UNBOUNDED = 2
+VIR_DOMAIN_JOB_COMPLETED = 3
+VIR_DOMAIN_JOB_FAILED = 4
+VIR_DOMAIN_JOB_CANCELLED = 5
+
+
 def _parse_disk_info(element):
     disk_info = {}
     disk_info['type'] = element.get('type', 'file')
@@ -601,6 +609,12 @@ class Domain(object):
         return self._def['memory']
 
     def blockJobInfo(self, disk, flags):
+        return {}
+
+    def jobInfo(self):
+        return []
+
+    def jobStats(self, flags=0):
         return {}
 
 
