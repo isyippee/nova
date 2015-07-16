@@ -3489,8 +3489,11 @@ class ComputeManager(manager.Manager):
             block_device_info = self._get_instance_block_device_info(
                                 context, instance, bdms=bdms)
 
+            # NOTE(apporc): ephemeral rbd root disk should not be deleted when
+            # migrating, and by now it is not taken care of when resizing.
+            destroy_disks = (CONF.libvirt.images_type != 'rbd')
             self.driver.destroy(context, instance, network_info,
-                                block_device_info)
+                                block_device_info, destroy_disks)
 
             self._terminate_volume_connections(context, instance, bdms)
 
