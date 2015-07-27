@@ -30,7 +30,10 @@ the other libvirt related classes
 from oslo.utils import importutils
 from nova.openstack.common import log as logging
 
-libvirt = importutils.import_module('libvirt')
+try:
+    libvirt = importutils.import_module('libvirt')
+except ImportError:
+    libvirt = None
 
 LOG = logging.getLogger(__name__)
 
