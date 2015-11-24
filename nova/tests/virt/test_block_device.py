@@ -238,16 +238,11 @@ class TestDriverBlockDevice(test.NoDBTestCase):
 
         # Test the save method
         with mock.patch.object(test_bdm._bdm_obj, 'save') as save_mock:
-            test_bdm.save(self.context)
+            test_bdm.save()
             for fld, alias in test_bdm._update_on_save.iteritems():
                 self.assertEqual(test_bdm[alias or fld],
                                  getattr(test_bdm._bdm_obj, fld))
 
-            save_mock.assert_called_once_with(self.context)
-
-        # Test the save method with no context passed
-        with mock.patch.object(test_bdm._bdm_obj, 'save') as save_mock:
-            test_bdm.save()
             save_mock.assert_called_once_with()
 
     def _test_driver_default_size(self, name):
@@ -331,7 +326,9 @@ class TestDriverBlockDevice(test.NoDBTestCase):
                        lambda: elevated_context)
         self.mox.StubOutWithMock(driver_bdm._bdm_obj, 'save')
         self.mox.StubOutWithMock(encryptors, 'get_encryption_metadata')
-        instance = {'id': 'fake_id', 'uuid': 'fake_uuid'}
+        instance_detail = {'id': '123', 'uuid': 'fake_uuid'}
+        instance = fake_instance.fake_instance_obj(self.context,
+                                                   **instance_detail)
         connector = {'ip': 'fake_ip', 'host': 'fake_host'}
         connection_info = {'data': {'access_mode': access_mode}}
         expected_conn_info = {'data': {'access_mode': access_mode},
@@ -381,7 +378,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
             self.volume_api.attach(elevated_context, fake_volume['id'],
                                    'fake_uuid', bdm_dict['device_name'],
                                    mode=access_mode).AndReturn(None)
-        driver_bdm._bdm_obj.save(self.context).AndReturn(None)
+        driver_bdm._bdm_obj.save().MultipleTimes().AndReturn(None)
         return instance, expected_conn_info
 
     def test_volume_attach(self):
@@ -492,7 +489,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
         self.volume_api.initialize_connection(
             self.context, test_bdm.volume_id,
             connector).AndReturn(connection_info)
-        test_bdm._bdm_obj.save(self.context).AndReturn(None)
+        test_bdm._bdm_obj.save().AndReturn(None)
 
         self.mox.ReplayAll()
 

@@ -5,7 +5,7 @@
         "availabilityZone": "zone1:host1",
         "displayName": "%(volume_name)s",
         "attachments": [
-            { "device": "/",
+            { "device": "/dev/sdb",
               "serverId": "%(uuid)s",
               "id": "%(uuid)s",
               "volumeId": "%(uuid)s"

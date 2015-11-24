@@ -1424,14 +1424,16 @@ class _ComputeAPIUnitTestMixIn(object):
                                   'attach_status': 'attached',
                                   'instance_uuid': 'fake',
                                   'size': 5,
-                                  'status': 'in-use'}
+                                  'status': 'in-use',
+                                  'multiattach': 'false'}
         new_volume_id = uuidutils.generate_uuid()
         volumes[new_volume_id] = {'id': new_volume_id,
                                   'display_name': 'new_volume',
                                   'attach_status': 'detached',
                                   'instance_uuid': None,
                                   'size': 5,
-                                  'status': 'available'}
+                                  'status': 'available',
+                                  'multiattach': 'false'}
         self.assertRaises(exception.InstanceInvalidState,
                           self.compute_api.swap_volume, self.context, instance,
                           volumes[old_volume_id], volumes[new_volume_id])

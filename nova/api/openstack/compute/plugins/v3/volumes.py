@@ -53,11 +53,16 @@ def _translate_volume_summary_view(context, vol):
     d['createdAt'] = vol['created_at']
 
     if vol['attach_status'] == 'attached':
+        instance_uuid = ",".join((attachment['serverId']
+                                  for attachment in vol['attachments']))
+        mountpoint = ",".join((attachment['device']
+                               for attachment in vol['attachments']))
         d['attachments'] = [_translate_attachment_detail_view(vol['id'],
-            vol['instance_uuid'],
-            vol['mountpoint'])]
+                                                              instance_uuid,
+                                                              mountpoint)]
     else:
         d['attachments'] = [{}]
+    d['multiattach'] = vol.get('multiattach')
 
     d['displayName'] = vol['display_name']
     d['displayDescription'] = vol['display_description']

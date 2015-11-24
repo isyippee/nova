@@ -751,9 +751,10 @@ class ComputeAPI(object):
         cctxt = self.client.prepare(server=_compute_host(None, instance),
                 version=version)
         volume_bdm = cctxt.call(ctxt, 'reserve_block_device_name', **kw)
-        if not isinstance(volume_bdm, objects.BlockDeviceMapping):
-            volume_bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                ctxt, volume_id)
+        bdm_cls = objects.BlockDeviceMapping
+        if not isinstance(volume_bdm, bdm_cls):
+            volume_bdm = bdm_cls.get_by_instance_and_volume_id(
+                ctxt, volume_id, instance.uuid)
         return volume_bdm
 
     def backup_instance(self, ctxt, instance, image_id, backup_type,

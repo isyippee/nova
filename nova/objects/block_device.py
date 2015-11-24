@@ -42,7 +42,14 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
     # Version 1.1: Add instance_uuid to get_by_volume_id method
     # Version 1.2: Instance version 1.14
     # Version 1.3: Instance version 1.15
-    VERSION = '1.3'
+    # Version 1.4: Instance version 1.16
+    # Version 1.5: Instance version 1.17
+    # Version 1.6: Instance version 1.18
+    # Version 1.7: Add update_or_create method
+    # Version 1.8: Instance version 1.19
+    # Version 1.9: Instance version 1.20
+    # Version 1.10: Add get_by_instance_and_volume_id method
+    VERSION = '1.10'
 
     fields = {
         'id': fields.IntegerField(),
@@ -165,6 +172,18 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
         return cls._from_db_object(context, cls(), db_bdm,
                                    expected_attrs=expected_attrs)
 
+    @base.remotable_classmethod
+    def get_by_instance_and_volume_id(cls, context, volume_id, instance_uuid,
+                                      expected_attrs=None):
+        if expected_attrs is None:
+            expected_attrs = []
+        db_bdm = db.block_device_mapping_get_by_instance_and_volume_id(
+            context, volume_id, instance_uuid, _expected_cols(expected_attrs))
+        if not db_bdm:
+            raise exception.VolumeBDMNotFound(volume_id=volume_id)
+        return cls._from_db_object(context, cls(), db_bdm,
+                                   expected_attrs=expected_attrs)
+
     @property
     def is_root(self):
         return self.boot_index == 0
@@ -205,7 +224,14 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
     # Version 1.2: Added use_slave to get_by_instance_uuid
     # Version 1.3: BlockDeviceMapping <= version 1.2
     # Version 1.4: BlockDeviceMapping <= version 1.3
-    VERSION = '1.4'
+    # Version 1.5: BlockDeviceMapping <= version 1.4
+    # Version 1.6: BlockDeviceMapping <= version 1.5
+    # Version 1.7: BlockDeviceMapping <= version 1.6
+    # Version 1.8: BlockDeviceMapping <= version 1.7
+    # Version 1.9: BlockDeviceMapping <= version 1.8
+    # Version 1.10: BlockDeviceMapping <= version 1.9
+    # Version 1.11: BlockDeviceMapping <= version 1.10
+    VERSION = '1.11'
 
     fields = {
         'objects': fields.ListOfObjectsField('BlockDeviceMapping'),
@@ -216,6 +242,13 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
         '1.2': '1.1',
         '1.3': '1.2',
         '1.4': '1.3',
+        '1.5': '1.4',
+        '1.6': '1.5',
+        '1.7': '1.6',
+        '1.8': '1.7',
+        '1.9': '1.8',
+        '1.10': '1.9',
+        '1.11': '1.10',
     }
 
     @base.remotable_classmethod

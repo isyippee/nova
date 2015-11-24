@@ -7093,7 +7093,7 @@ class LibvirtConnTestCase(test.TestCase):
             if not hasattr(self, attrname):
                 self[attrname] = {}
 
-        def fake_save(self, context):
+        def fake_save(self):
             pass
 
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -12781,9 +12781,11 @@ class LibvirtVolumeSnapshotTestCase(test.TestCase):
     @mock.patch('nova.virt.block_device.DriverVolumeBlockDevice.'
                 'refresh_connection_info')
     @mock.patch('nova.objects.block_device.BlockDeviceMapping.'
-                'get_by_volume_id')
-    def test_volume_refresh_connection_info(self, mock_get_by_volume_id,
+                'get_by_instance_and_volume_id')
+    def test_volume_refresh_connection_info(self,
+                                            mock_get_by_instance_and_volume_id,
                                             mock_refresh_connection_info):
+        instance = objects.Instance(**self.inst)
         fake_bdm = fake_block_device.FakeDbBlockDeviceDict({
             'id': 123,
             'instance_uuid': 'fake-instance',
@@ -12792,13 +12794,14 @@ class LibvirtVolumeSnapshotTestCase(test.TestCase):
             'destination_type': 'volume',
             'volume_id': 'fake-volume-id-1',
             'connection_info': '{"fake": "connection_info"}'})
-        mock_get_by_volume_id.return_value = fake_bdm
+        mock_get_by_instance_and_volume_id.return_value = fake_bdm
 
-        self.conn._volume_refresh_connection_info(self.c, self.inst,
+        self.conn._volume_refresh_connection_info(self.c, instance,
                                                   self.volume_uuid)
 
-        mock_get_by_volume_id.assert_called_once_with(self.c, self.volume_uuid)
-        mock_refresh_connection_info.assert_called_once_with(self.c, self.inst,
+        mock_get_by_instance_and_volume_id.assert_called_once_with(
+            self.c, self.volume_uuid, instance.uuid)
+        mock_refresh_connection_info.assert_called_once_with(self.c, instance,
             self.conn._volume_api, self.conn)
 
     def test_volume_snapshot_create(self, quiesce=True):

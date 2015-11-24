@@ -394,7 +394,9 @@ class ComputeVolumeTestCase(BaseTestCase):
                 fake_instance.fake_db_instance())
         self.stubs.Set(self.compute.volume_api, 'get', lambda *a, **kw:
                        {'id': self.volume_id,
-                        'attach_status': 'detached'})
+                        'attach_status': 'detached',
+                        'attachments': [{'attachment_id':
+                            "a26887c6-c47b-4654-abb5-dfadf7d3f803"}]})
         self.stubs.Set(self.compute.driver, 'get_volume_connector',
                        lambda *a, **kw: None)
         self.stubs.Set(self.compute.volume_api, 'initialize_connection',
@@ -424,7 +426,11 @@ class ComputeVolumeTestCase(BaseTestCase):
         self.stubs.Set(db, 'block_device_mapping_update', store_cinfo)
 
     def test_attach_volume_serial(self):
-        fake_bdm = objects.BlockDeviceMapping(**self.fake_volume)
+        fake_bdm = objects.BlockDeviceMapping(context=self.context,
+                                              **self.fake_volume)
+        self.stubs.Set(objects.BlockDeviceMapping,
+                       'get_by_instance_and_volume_id',
+                       classmethod(lambda *a, **kw: fake_bdm))
         with (mock.patch.object(cinder.API, 'get_volume_encryption_metadata',
                                 return_value={})):
             instance = self._create_fake_instance()
@@ -438,6 +444,10 @@ class ComputeVolumeTestCase(BaseTestCase):
 
         def fake_attach(*args, **kwargs):
             raise test.TestingException
+
+        self.stubs.Set(objects.BlockDeviceMapping,
+                       'get_by_instance_and_volume_id',
+                       classmethod(lambda *a, **kw: fake_bdm))
 
         with contextlib.nested(
             mock.patch.object(driver_block_device.DriverVolumeBlockDevice,
@@ -462,7 +472,7 @@ class ComputeVolumeTestCase(BaseTestCase):
             mock.patch.object(self.compute, '_detach_volume'),
             mock.patch.object(self.compute.volume_api, 'detach'),
             mock.patch.object(objects.BlockDeviceMapping,
-                              'get_by_volume_id'),
+                              'get_by_instance_and_volume_id'),
             mock.patch.object(fake_bdm, 'destroy')
         ) as (mock_internal_detach, mock_detach, mock_get, mock_destroy):
             mock_detach.side_effect = test.TestingException
@@ -481,12 +491,13 @@ class ComputeVolumeTestCase(BaseTestCase):
 
         with contextlib.nested(
             mock.patch.object(objects.BlockDeviceMapping,
-                'get_by_volume_id', return_value=fake_bdm),
+                'get_by_instance_and_volume_id', return_value=fake_bdm),
             mock.patch.object(self.compute, '_attach_volume')
         ) as (mock_get_by_id, mock_attach):
             self.compute.attach_volume(self.context, 'fake', '/dev/vdb',
                     instance, bdm=None)
-            mock_get_by_id.assert_called_once_with(self.context, 'fake')
+            mock_get_by_id.assert_called_once_with(self.context, 'fake',
+                                                   instance['uuid'])
             self.assertTrue(mock_attach.called)
 
     def test_await_block_device_created_too_slow(self):
@@ -571,8 +582,8 @@ class ComputeVolumeTestCase(BaseTestCase):
                 'delete_on_termination': False,
             })]
             prepped_bdm = self.compute._prep_block_device(
-                    self.context, self.instance, block_device_mapping)
-            mock_save.assert_called_once_with(self.context)
+                    self.context, self.instance_object, block_device_mapping)
+            self.assertEqual(2, mock_save.call_count)
             volume_driver_bdm = prepped_bdm['block_device_mapping'][0]
             self.assertEqual(volume_driver_bdm['connection_info']['serial'],
                              self.volume_id)
@@ -770,23 +781,30 @@ class ComputeVolumeTestCase(BaseTestCase):
     def test_detach_volume_usage(self):
         # Test that detach volume update the volume usage cache table correctly
         instance = self._create_fake_instance()
-        bdm = fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 1, 'device_name': '/dev/vdb',
-                 'connection_info': '{}', 'instance_uuid': instance['uuid'],
-                 'source_type': 'volume', 'destination_type': 'volume',
-                 'volume_id': 1})
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         id=1, device_name='/dev/vdb',
+                                         connection_info='{}',
+                                         instance_uuid=instance['uuid'],
+                                         source_type='volume',
+                                         destination_type='volume',
+                                         no_device=False,
+                                         disk_bus='foo',
+                                         device_type='disk',
+                                         volume_id=1)
         host_volume_bdms = {'id': 1, 'device_name': '/dev/vdb',
                'connection_info': '{}', 'instance_uuid': instance['uuid'],
                'volume_id': 1}
 
-        self.mox.StubOutWithMock(db, 'block_device_mapping_get_by_volume_id')
+        self.mox.StubOutWithMock(objects.BlockDeviceMapping,
+                                 'get_by_instance_and_volume_id')
         self.mox.StubOutWithMock(self.compute.driver, 'block_stats')
         self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
         self.mox.StubOutWithMock(self.compute.driver, 'get_all_volume_usage')
+        self.mox.StubOutWithMock(self.compute.driver, 'instance_exists')
 
         # The following methods will be called
-        db.block_device_mapping_get_by_volume_id(self.context, 1, []).\
-            AndReturn(bdm)
+        objects.BlockDeviceMapping.get_by_instance_and_volume_id(
+            self.context, 1, instance['uuid']).AndReturn(bdm.obj_clone())
         self.compute.driver.block_stats(instance['name'], 'vdb').\
             AndReturn([1L, 30L, 1L, 20L, None])
         self.compute._get_host_volume_bdms(self.context,
@@ -800,9 +818,13 @@ class ComputeVolumeTestCase(BaseTestCase):
                           'wr_req': 1,
                           'wr_bytes': 5,
                           'instance': instance}])
-        db.block_device_mapping_get_by_volume_id(self.context, 1, []).\
-            AndReturn(bdm)
 
+        self.compute.driver.instance_exists(mox.IgnoreArg()).AndReturn(True)
+
+        def fake_volume_attachment_get(self, volume, instance_uuid):
+            return {'attachment_id': 'abc123'}
+        self.stubs.Set(cinder.API, "get_volume_attachment",
+                       fake_volume_attachment_get)
         self.mox.ReplayAll()
 
         def fake_get_volume_encryption_metadata(self, context, volume_id):
@@ -810,7 +832,8 @@ class ComputeVolumeTestCase(BaseTestCase):
         self.stubs.Set(cinder.API, 'get_volume_encryption_metadata',
                        fake_get_volume_encryption_metadata)
 
-        self.compute.attach_volume(self.context, 1, '/dev/vdb', instance)
+        self.compute.attach_volume(self.context, 1, '/dev/vdb',
+                                   instance, bdm=bdm)
 
         # Poll volume usage & then detach the volume. This will update the
         # total fields in the volume usage cache.
@@ -1084,7 +1107,9 @@ class ComputeVolumeTestCase(BaseTestCase):
             def fake_volume_get(self, ctxt, volume_id):
                 return {'id': volume_id,
                         'status': status,
-                        'attach_status': attach_status}
+                        'attach_status': attach_status,
+                        'multiattach': False,
+                        'attachments': []}
             self.stubs.Set(cinder.API, 'get', fake_volume_get)
             self.assertRaises(exception.InvalidVolume,
                               self.compute_api._validate_bdm,
@@ -1106,7 +1131,9 @@ class ComputeVolumeTestCase(BaseTestCase):
         def fake_volume_get_ok(self, context, volume_id):
             return {'id': volume_id,
                     'status': 'available',
-                    'attach_status': 'detached'}
+                    'attach_status': 'detached',
+                    'multiattach': 'false',
+                    'attachments': []}
         self.stubs.Set(cinder.API, 'get', fake_volume_get_ok)
 
         self.compute_api._validate_bdm(self.context, self.instance,
@@ -1867,12 +1894,15 @@ class ComputeTestCase(BaseTestCase):
             pass
 
         def fake_volume_get(self, context, volume_id):
-            return {'id': volume_id}
+            return {'id': volume_id,
+                    'attachments': [{'attachment_id': 'abc123',
+                                    'instance_uuid': instance['uuid'],
+                                    'volume_id': volume_id}]}
 
         def fake_terminate_connection(self, context, volume_id, connector):
             pass
 
-        def fake_detach(self, context, volume_id):
+        def fake_detach(self, context, volume_id, attachment_id):
             pass
 
         bdms = []
@@ -9142,9 +9172,9 @@ class ComputeAPITestCase(BaseTestCase):
                 {'source_type': 'volume', 'destination_type': 'volume',
                  'volume_id': 'fake-volume-id', 'device_name': '/dev/vdb'})
         bdm = block_device_obj.BlockDeviceMapping()._from_db_object(
-                self.context,
-                block_device_obj.BlockDeviceMapping(),
-                fake_bdm)
+            self.context,
+            block_device_obj.BlockDeviceMapping(),
+            fake_bdm)
         instance = self._create_fake_instance()
         fake_volume = {'id': 'fake-volume-id'}
 
@@ -9198,7 +9228,7 @@ class ComputeAPITestCase(BaseTestCase):
         def fake_rpc_reserve_block_device_name(self, context, instance, device,
                                                volume_id, **kwargs):
             called['fake_rpc_reserve_block_device_name'] = True
-            bdm = block_device_obj.BlockDeviceMapping()
+            bdm = block_device_obj.BlockDeviceMapping(context=context)
             bdm['device_name'] = '/dev/vdb'
             return bdm
 
@@ -9224,8 +9254,11 @@ class ComputeAPITestCase(BaseTestCase):
         # Ensure volume can be detached from instance
         called = {}
         instance = self._create_fake_instance()
-        volume = {'id': 1, 'attach_status': 'in-use',
-                  'instance_uuid': instance['uuid']}
+        volume = {'id': 1,
+                  'attach_status': 'in-use',
+                  'attachments': [{
+                      'attachment_id': 'abc123',
+                      'instance_uuid': instance['uuid']}]}
 
         def fake_check_detach(*args, **kwargs):
             called['fake_check_detach'] = True
@@ -9268,8 +9301,8 @@ class ComputeAPITestCase(BaseTestCase):
                     'launched_at': timeutils.utcnow(),
                     'vm_state': vm_states.ACTIVE,
                     'task_state': None}
-        volume = {'id': 1, 'attach_status': 'in-use',
-                  'instance_uuid': 'uuid2'}
+        volume = {'id': 1, 'attach_status': 'in-use', 'status': 'available',
+                  'attachments': []}
 
         self.assertRaises(exception.VolumeUnattached,
                           self.compute_api.detach_volume, self.context,
@@ -9316,11 +9349,12 @@ class ComputeAPITestCase(BaseTestCase):
         self.stubs.Set(self.compute.driver, "detach_volume",
                        fake_libvirt_driver_detach_volume_fails)
 
-        self.mox.StubOutWithMock(objects.BlockDeviceMapping,
-                                 'get_by_volume_id')
-        objects.BlockDeviceMapping.get_by_volume_id(
-                self.context, 1).AndReturn(objects.BlockDeviceMapping(
-                    **fake_bdm))
+        self.mox.StubOutWithMock(block_device_obj.BlockDeviceMapping,
+                                 'get_by_instance_and_volume_id')
+        objects.BlockDeviceMapping.get_by_instance_and_volume_id(
+                self.context, 1, instance['uuid']).AndReturn(
+                        objects.BlockDeviceMapping(
+                            context=self.context, **fake_bdm))
         self.mox.ReplayAll()
 
         self.assertRaises(AttributeError, self.compute.detach_volume,
@@ -9345,10 +9379,15 @@ class ComputeAPITestCase(BaseTestCase):
             return {'id': volume_id}
         self.stubs.Set(cinder.API, "get", fake_volume_get)
 
+        def fake_volume_attachment_get(self, volume, instance_uuid):
+            return {'attachment_id': 'abc123'}
+        self.stubs.Set(cinder.API, "get_volume_attachment",
+                       fake_volume_attachment_get)
+
         # Stub out and record whether it gets detached
         result = {"detached": False}
 
-        def fake_detach(self, context, volume_id_param):
+        def fake_detach(self, context, volume_id_param, attachment_id):
             result["detached"] = volume_id_param == volume_id
         self.stubs.Set(cinder.API, "detach", fake_detach)
 
@@ -9388,7 +9427,19 @@ class ComputeAPITestCase(BaseTestCase):
             bdm_obj.create(admin)
             bdms.append(bdm_obj)
 
-        self.stubs.Set(self.compute, 'volume_api', mox.MockAnything())
+        self.stubs.Set(cinder.API, "terminate_connection", mox.MockAnything())
+        self.stubs.Set(cinder.API, "detach", mox.MockAnything())
+
+        def fake_volume_get(self, context, volume_id):
+            return {'id': volume_id}
+
+        self.stubs.Set(cinder.API, "get", fake_volume_get)
+
+        def fake_volume_attachment_get(self, volume, instance_uuid):
+            return {'attachment_id': '123'}
+        self.stubs.Set(cinder.API, "get_volume_attachment",
+                       fake_volume_attachment_get)
+
         self.stubs.Set(self.compute, '_prep_block_device', mox.MockAnything())
         self.compute.run_instance(self.context, instance, {}, {}, None, None,
                 None, True, None, False)
@@ -10497,8 +10548,7 @@ class DisabledInstanceTypesTestCase(BaseTestCase):
 
     def test_can_resize_to_visible_instance_type(self):
         instance = self._create_fake_instance_obj()
-        orig_get_flavor_by_flavor_id =\
-                flavors.get_flavor_by_flavor_id
+        orig_get_flavor_by_flavor_id = flavors.get_flavor_by_flavor_id
 
         def fake_get_flavor_by_flavor_id(flavor_id, ctxt=None,
                                                 read_deleted="yes"):
@@ -10516,8 +10566,7 @@ class DisabledInstanceTypesTestCase(BaseTestCase):
 
     def test_cannot_resize_to_disabled_instance_type(self):
         instance = self._create_fake_instance_obj()
-        orig_get_flavor_by_flavor_id = \
-                flavors.get_flavor_by_flavor_id
+        orig_get_flavor_by_flavor_id = flavors.get_flavor_by_flavor_id
 
         def fake_get_flavor_by_flavor_id(flavor_id, ctxt=None,
                                                 read_deleted="yes"):
@@ -11107,7 +11156,8 @@ class EvacuateHostTestCase(BaseTestCase):
                   'source_type': 'volume',
                   'device_name': '/dev/vdc',
                   'delete_on_termination': False,
-                  'volume_id': 'fake_volume_id'}
+                  'volume_id': 'fake_volume_id',
+                  'connection_info': '{}'}
 
         db.block_device_mapping_create(self.context, values)
 
@@ -11115,12 +11165,24 @@ class EvacuateHostTestCase(BaseTestCase):
             return {'id': 'fake_volume_id'}
         self.stubs.Set(cinder.API, "get", fake_volume_get)
 
+        def fake_get_volume_attachment(self, volume, instance_uuid):
+            return {'instance_uuid': instance_uuid,
+                    'mountpoint': '/dev/vdc',
+                    'attachment_id': 'abc123'}
+        self.stubs.Set(cinder.API, "get_volume_attachment",
+                       fake_get_volume_attachment)
+
         # Stub out and record whether it gets detached
         result = {"detached": False}
 
-        def fake_detach(self, context, volume):
+        def fake_detach(self, context, volume, attachment_id):
             result["detached"] = volume["id"] == 'fake_volume_id'
         self.stubs.Set(cinder.API, "detach", fake_detach)
+
+        self.mox.StubOutWithMock(self.compute, '_detach_volume')
+        self.compute._detach_volume(mox.IsA(self.context),
+                                    mox.IsA(instance_obj.Instance),
+                                    mox.IsA(objects.BlockDeviceMapping))
 
         def fake_terminate_connection(self, context, volume, connector):
             return {}
@@ -11129,7 +11191,8 @@ class EvacuateHostTestCase(BaseTestCase):
 
         # make sure volumes attach, detach are called
         self.mox.StubOutWithMock(self.compute.volume_api, 'detach')
-        self.compute.volume_api.detach(mox.IsA(self.context), mox.IgnoreArg())
+        self.compute.volume_api.detach(mox.IsA(self.context), mox.IgnoreArg(),
+                                       mox.IgnoreArg())
 
         self.mox.StubOutWithMock(self.compute, '_prep_block_device')
         self.compute._prep_block_device(mox.IsA(self.context),

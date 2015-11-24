@@ -265,6 +265,8 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                      self).get_config(connection_info, disk_info)
         conf.source_type = "block"
         conf.source_path = connection_info['data']['host_device']
+        if connection_info.get('multiattach', False):
+            conf.shareable = True
         return conf
 
     @utils.synchronized('connect_volume')

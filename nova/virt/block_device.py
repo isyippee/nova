@@ -44,7 +44,7 @@ def update_db(method):
     @functools.wraps(method)
     def wrapped(obj, context, *args, **kwargs):
         ret_val = method(obj, context, *args, **kwargs)
-        obj.save(context)
+        obj.save()
         return ret_val
     return wrapped
 
@@ -130,14 +130,10 @@ class DriverBlockDevice(dict):
         """
         raise NotImplementedError()
 
-    def save(self, context=None):
+    def save(self):
         for attr_name, key_name in self._update_on_save.iteritems():
             setattr(self._bdm_obj, attr_name, self[key_name or attr_name])
-
-        if context:
-            self._bdm_obj.save(context)
-        else:
-            self._bdm_obj.save()
+        self._bdm_obj.save()
 
 
 class DriverSwapBlockDevice(DriverBlockDevice):
@@ -239,6 +235,9 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
             connection_info['serial'] = self.volume_id
         self._preserve_multipath_id(connection_info)
 
+        if volume.get('multiattach', False):
+            connection_info['multiattach'] = True
+
         # If do_driver_attach is False, we will attach a volume to an instance
         # at boot time. So actual attach is done by instance creation code.
         if do_driver_attach:
@@ -264,9 +263,13 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
         mode = 'rw'
         if 'data' in connection_info:
             mode = connection_info['data'].get('access_mode', 'rw')
-        if volume['attach_status'] == "detached":
-            volume_api.attach(context, volume_id, instance['uuid'],
-                              self['mount_device'], mode=mode)
+        # NOTE(mriedem): save our current state so connection_info is in
+        # the database before the volume status goes to 'in-use' because
+        # after that we can detach and connection_info is required for
+        # detach.
+        self.save()
+        volume_api.attach(context, volume_id, instance.uuid,
+                          self['mount_device'], mode=mode)
 
     @update_db
     def refresh_connection_info(self, context, instance,
@@ -284,7 +287,7 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
         self._preserve_multipath_id(connection_info)
         self['connection_info'] = connection_info
 
-    def save(self, context=None):
+    def save(self):
         # NOTE(ndipanov): we might want to generalize this by adding it to the
         # _update_on_save and adding a transformation function.
         try:
@@ -292,7 +295,7 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
                     self.get('connection_info'))
         except TypeError:
             pass
-        super(DriverVolumeBlockDevice, self).save(context)
+        super(DriverVolumeBlockDevice, self).save()
 
 
 class DriverSnapshotBlockDevice(DriverVolumeBlockDevice):

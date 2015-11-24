@@ -58,10 +58,8 @@ def _translate_volume_summary_view(context, vol):
     d['availabilityZone'] = vol['availability_zone']
     d['createdAt'] = vol['created_at']
 
-    if vol['attach_status'] == 'attached':
-        d['attachments'] = [_translate_attachment_detail_view(vol['id'],
-            vol['instance_uuid'],
-            vol['mountpoint'])]
+    if vol['attach_status'] == 'attached' and 'attachments' in vol:
+        d['attachments'] = _translate_attachment_detail_view(vol)
     else:
         d['attachments'] = [{}]
 
@@ -270,27 +268,26 @@ class VolumeController(wsgi.Controller):
         return wsgi.ResponseObject(result, headers=dict(location=location))
 
 
-def _translate_attachment_detail_view(volume_id, instance_uuid, mountpoint):
+def _translate_attachment_detail_view(volume):
     """Maps keys for attachment details view."""
 
-    d = _translate_attachment_summary_view(volume_id,
-            instance_uuid,
-            mountpoint)
+    attachments = []
+    for attach in volume['attachments']:
+        a = _translate_attachment_summary_view(volume['id'],
+                                               attach['serverId'],
+                                               attach['device'])
+        attachments.append(a)
 
     # No additional data / lookups at the moment
-    return d
+    return attachments
 
 
 def _translate_attachment_summary_view(volume_id, instance_uuid, mountpoint):
     """Maps keys for attachment summary view."""
-    d = {}
+    d = {'id': volume_id,
+         'volumeId': volume_id,
+         'serverId': instance_uuid}
 
-    # NOTE(justinsb): We use the volume id as the id of the attachment object
-    d['id'] = volume_id
-
-    d['volumeId'] = volume_id
-
-    d['serverId'] = instance_uuid
     if mountpoint:
         d['device'] = mountpoint
 
@@ -374,10 +371,22 @@ class VolumeAttachmentController(wsgi.Controller):
             msg = _("volume_id not found: %s") % volume_id
             raise exc.HTTPNotFound(explanation=msg)
 
-        return {'volumeAttachment': _translate_attachment_detail_view(
-            volume_id,
-            instance['uuid'],
-            assigned_mountpoint)}
+        try:
+            vol = self.volume_api.get(context, volume_id)
+        except exception.NotFound:
+            raise exc.HTTPNotFound()
+
+        if 'attachments' in vol:
+            attachments = _translate_attachment_detail_view(vol)
+        else:
+            attachments = [{}]
+        attachment = None
+        for attach in attachments:
+            if attach['serverId'] == instance['uuid']:
+                attachment = attach
+                break
+
+        return {'volumeAttachment': attachment}
 
     def _validate_volume_id(self, volume_id):
         if not uuidutils.is_uuid_like(volume_id):

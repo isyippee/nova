@@ -58,7 +58,15 @@ def fake_get_instance(self, context, instance_id, want_objects=False):
 
 
 def fake_get_volume(self, context, id):
-    return {'id': 'woot'}
+    return {'id': FAKE_UUID_A,
+            'status': 'available',
+            'attachments': [{
+                'serverId': FAKE_UUID,
+                'device': '/dev/fake0',
+                'id': FAKE_UUID,
+                'volumeId': FAKE_UUID,
+            }
+            ]}
 
 
 def fake_attach_volume(self, context, instance, volume_id, device):

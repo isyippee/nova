@@ -3126,6 +3126,7 @@ class CloudTestCase(test.TestCase):
         # Validates that VolumeUnattached is raised if the volume doesn't
         # have an instance_uuid value.
         ec2_volume_id = 'vol-987654321'
+        ec2_instance_id = 'inst-987654321'
 
         with mock.patch.object(self.cloud.volume_api, 'get',
                                side_effect=lambda context, volume_id:
@@ -3133,7 +3134,8 @@ class CloudTestCase(test.TestCase):
             self.assertRaises(exception.VolumeUnattached,
                               self.cloud.detach_volume,
                               self.context,
-                              ec2_volume_id)
+                              ec2_volume_id,
+                              ec2_instance_id)
             mock_get.assert_called_once_with(self.context, mock.ANY)
             mock_ec2_vol_id_to_uuid.assert_called_once_with(ec2_volume_id)
 
