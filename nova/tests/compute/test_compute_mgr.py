@@ -22,14 +22,17 @@ import mox
 from oslo.config import cfg
 from oslo import messaging
 
+from nova.compute import manager
 from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+from nova.conductor import api as conductor_api
 from nova.conductor import rpcapi as conductor_rpcapi
 from nova import context
 from nova import db
 from nova import exception
+from nova.network import api as network_api
 from nova.network import model as network_model
 from nova import objects
 from nova.objects import block_device as block_device_obj
@@ -42,7 +45,7 @@ from nova.tests import fake_instance
 from nova.tests.objects import test_instance_fault
 from nova.tests.objects import test_instance_info_cache
 from nova import utils
-
+from nova.virt import driver as virt_driver
 
 CONF = cfg.CONF
 CONF.import_opt('compute_manager', 'nova.service')
@@ -2133,6 +2136,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(self.compute, '_set_instance_error_state')
         self.mox.StubOutWithMock(self.compute.compute_task_api,
                                  'build_instances')
+        self.mox.StubOutWithMock(self.compute.network_api,
+                                 'cleanup_instance_network_on_host')
         self._do_build_instance_update(reschedule_update=True)
         self.compute._build_and_run_instance(self.context, self.instance,
                 self.image, self.injected_files, self.admin_pass,
@@ -2141,6 +2146,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                 self.filter_properties).AndRaise(
                         exception.RescheduledException(reason='',
                             instance_uuid=self.instance.uuid))
+        self.compute.network_api.cleanup_instance_network_on_host(self.context,
+            self.instance, self.compute.host)
         self.compute.compute_task_api.build_instances(self.context,
                 [self.instance], self.image, self.filter_properties,
                 self.admin_pass, self.injected_files, self.requested_networks,
@@ -2191,6 +2198,50 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                 self.block_device_mapping, self.node,
                 self.limits, self.filter_properties)
 
+    @mock.patch.object(manager.ComputeManager, '_build_and_run_instance')
+    @mock.patch.object(conductor_api.ComputeTaskAPI, 'build_instances')
+    @mock.patch.object(network_api.API, 'cleanup_instance_network_on_host')
+    @mock.patch.object(objects.Instance, 'save')
+    @mock.patch.object(objects.InstanceActionEvent, 'event_start')
+    @mock.patch.object(objects.InstanceActionEvent,
+                       'event_finish_with_failure')
+    @mock.patch.object(virt_driver.ComputeDriver, 'macs_for_instance')
+    def test_rescheduled_exception_with_network_allocated(self,
+            mock_macs_for_instance, mock_event_finish,
+            mock_event_start, mock_ins_save, mock_cleanup_network,
+            mock_build_ins, mock_build_and_run):
+        instance = fake_instance.fake_instance_obj(self.context,
+                vm_state=vm_states.ACTIVE,
+                system_metadata={'network_allocated': 'True'},
+                expected_attrs=['metadata', 'system_metadata', 'info_cache'])
+        mock_ins_save.return_value = instance
+        mock_macs_for_instance.return_value = []
+        mock_build_and_run.side_effect = exception.RescheduledException(
+            reason='', instance_uuid=self.instance.uuid)
+
+        self.compute.build_and_run_instance(self.context, instance,
+            self.image, request_spec={},
+            filter_properties=self.filter_properties,
+            injected_files=self.injected_files,
+            admin_password=self.admin_pass,
+            requested_networks=self.requested_networks,
+            security_groups=self.security_groups,
+            block_device_mapping=self.block_device_mapping, node=self.node,
+            limits=self.limits)
+
+        mock_build_and_run.assert_called_once_with(self.context,
+            instance,
+            self.image, self.injected_files, self.admin_pass,
+            self.requested_networks, self.security_groups,
+            self.block_device_mapping, self.node, self.limits,
+            self.filter_properties)
+        mock_cleanup_network.assert_called_once_with(
+            self.context, instance, self.compute.host)
+        mock_build_ins.assert_called_once_with(self.context,
+            [instance], self.image, self.filter_properties,
+            self.admin_pass, self.injected_files, self.requested_networks,
+            self.security_groups, self.block_device_mapping)
+
     def test_rescheduled_exception_without_retry(self):
         self.mox.StubOutWithMock(self.compute, '_build_and_run_instance')
         self.mox.StubOutWithMock(compute_utils, 'add_instance_fault_from_exc')
@@ -2231,6 +2282,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(self.compute, '_cleanup_allocated_networks')
         self.mox.StubOutWithMock(self.compute.compute_task_api,
                 'build_instances')
+        self.mox.StubOutWithMock(self.compute.network_api,
+                                 'cleanup_instance_network_on_host')
         self._do_build_instance_update(reschedule_update=True)
         self.compute._build_and_run_instance(self.context, self.instance,
                 self.image, self.injected_files, self.admin_pass,
@@ -2241,6 +2294,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                             instance_uuid=self.instance.uuid))
         self.compute.driver.deallocate_networks_on_reschedule(
                 self.instance).AndReturn(False)
+        self.compute.network_api.cleanup_instance_network_on_host(
+            self.context, self.instance, self.compute.host)
         self.compute.compute_task_api.build_instances(self.context,
                 [self.instance], self.image, self.filter_properties,
                 self.admin_pass, self.injected_files, self.requested_networks,
@@ -2516,6 +2571,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(self.compute, '_get_resource_tracker')
         self.mox.StubOutWithMock(self.compute.compute_task_api,
                 'build_instances')
+        self.mox.StubOutWithMock(self.compute.network_api,
+                'cleanup_instance_network_on_host')
         self.compute._get_resource_tracker(self.node).AndReturn(
             FakeResourceTracker())
         self._do_build_instance_update(reschedule_update=True)
@@ -2523,6 +2580,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
             extra_usage_info={'image_name': self.image.get('name')})
         self._notify_about_instance_usage('create.error',
             fault=exc, stub=False)
+        self.compute.network_api.cleanup_instance_network_on_host(
+            self.context, self.instance, self.compute.host)
         self.compute.compute_task_api.build_instances(self.context,
                 [self.instance], self.image, self.filter_properties,
                 self.admin_pass, self.injected_files, self.requested_networks,
@@ -2814,6 +2873,10 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
 
         self.mox.StubOutWithMock(self.compute, '_get_instance_nw_info')
         self.mox.StubOutWithMock(self.compute, '_allocate_network')
+        self.mox.StubOutWithMock(self.compute.network_api,
+                                 'setup_instance_network_on_host')
+        self.compute.network_api.setup_instance_network_on_host(
+            self.context, instance, instance.host)
         self.compute._get_instance_nw_info(self.context, instance).AndReturn(
                     network_model.NetworkInfoAsyncWrapper(fake_network_info))
         self.mox.ReplayAll()
