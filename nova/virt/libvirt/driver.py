@@ -4082,6 +4082,23 @@ class LibvirtDriver(driver.ComputeDriver):
                                 ("org.qemu.guest_agent.0", instance['name']))
                 guest.add_device(qga)
 
+            eayunga_enabled = False
+            hw_eayunga = img_meta_prop.get('hw_eayun_guest_agent', 'no')
+            if hw_eayunga.lower() == 'yes':
+                LOG.debug("EayunStack guest agent is enabled through "
+                          "image metadata", instance=instance)
+                eayunga_enabled = True
+
+            if eayunga_enabled:
+                # EayunStack Channel
+                eayunga = vconfig.LibvirtConfigGuestChannel()
+                eayunga.type = "unix"
+                eayunga.target_name = "com.eayun.eayunstack.0"
+                eayunga.source_path = ("/var/lib/libvirt/qemu/%s.%s.sock" %
+                                       (instance['uuid'], "com.eayun.eayunstack.0"))
+
+                guest.add_device(eayunga)
+
             if (img_meta_prop.get('hw_rng_model') == 'virtio' and
                 flavor.extra_specs.get('hw_rng:allowed',
                                              '').lower() == 'true'):
