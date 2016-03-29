@@ -1449,32 +1449,11 @@ class Controller(wsgi.Controller):
 
         instance = self._get_server(context, req, id)
 
-        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                    context, instance.uuid)
-
         try:
-            if self.compute_api.is_volume_backed_instance(context, instance,
-                                                          bdms):
-                img = instance['image_ref']
-                if not img:
-                    properties = bdms.root_metadata(
-                            context, self.compute_api.image_api,
-                            self.compute_api.volume_api)
-                    image_meta = {'properties': properties}
-                else:
-                    image_meta = self.compute_api.image_api.get(context, img)
-
-                image = self.compute_api.snapshot_volume_backed(
-                                                       context,
-                                                       instance,
-                                                       image_meta,
-                                                       image_name,
-                                                       extra_properties=props)
-            else:
-                image = self.compute_api.snapshot(context,
-                                                  instance,
-                                                  image_name,
-                                                  extra_properties=props)
+            image = self.compute_api.snapshot(context,
+                                                instance,
+                                                image_name,
+                                                extra_properties=props)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                         'createImage')
