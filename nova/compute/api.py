@@ -2172,6 +2172,11 @@ class API(base.Base):
         # hence the zero size
         image_meta['size'] = 0
 
+        # Since there may be multi disks attached to one instance, we only
+        # record the disk format for root volume.
+        if not image_meta['disk_format']:
+            image_meta['disk_format'] = image_meta['properties']['disk_format']
+
         return self.image_api.create(context, image_meta)
 
     @wrap_check_policy
