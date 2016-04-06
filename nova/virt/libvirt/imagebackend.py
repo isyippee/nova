@@ -613,12 +613,7 @@ class Rbd(Image):
 
     def __init__(self, instance=None, disk_name=None, path=None, **kwargs):
         super(Rbd, self).__init__("block", "rbd", is_block_dev=False)
-        if path:
-            try:
-                self.rbd_name = path.split('/')[1]
-            except IndexError:
-                raise exception.InvalidDevicePath(path=path)
-        else:
+        if not path:
             self.rbd_name = '%s_%s' % (instance['uuid'], disk_name)
 
         if not CONF.libvirt.images_rbd_pool:
@@ -636,7 +631,7 @@ class Rbd(Image):
             ceph_conf=self.ceph_conf,
             rbd_user=self.rbd_user)
 
-        self.path = 'rbd:%s/%s' % (self.pool, self.rbd_name)
+        self.path = path or 'rbd:%s/%s' % (self.pool, self.rbd_name)
         if self.rbd_user:
             self.path += ':id=' + self.rbd_user
         if self.ceph_conf:
